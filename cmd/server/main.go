@@ -1,16 +1,20 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
-	"net/http"
+
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	r := gin.Default()
+
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
 	})
+
 	log.Println("listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	if err := r.Run(":8080"); err != nil {
+		log.Fatal(err)
+	}
 }
