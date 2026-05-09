@@ -35,7 +35,11 @@ func (b *BaseHandler) TryNext(ctx context.Context, url string) (*FetchResult, er
 }
 
 // Chain wires handlers left-to-right and returns the head.
+// Returns nil if no handlers are provided.
 func Chain(handlers ...Handler) Handler {
+	if len(handlers) == 0 {
+		return nil
+	}
 	for i := 0; i < len(handlers)-1; i++ {
 		handlers[i].SetNext(handlers[i+1])
 	}
