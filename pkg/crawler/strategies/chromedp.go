@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
-	"github.com/neerajvipparla/mcp-me/internal/crawler/types"
+	"github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 )
 
 type ChromedpHandler struct {

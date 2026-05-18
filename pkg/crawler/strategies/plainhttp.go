@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/neerajvipparla/mcp-me/internal/crawler/types"
+	"github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 )
 
 const minContentLength = 500

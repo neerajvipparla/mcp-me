@@ -2,7 +2,7 @@ package helper
 
 import (
 	md "github.com/JohannesKaufmann/html-to-markdown"
-	"github.com/neerajvipparla/mcp-me/internal/crawler/types"
+	"github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 )
 
 var htmlConverter = md.NewConverter("", true, nil)

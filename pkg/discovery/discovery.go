@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	crawlertypes "github.com/neerajvipparla/mcp-me/internal/crawler/types"
+	crawlertypes "github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 )
 
 // Discoverer finds all crawlable URLs for a documentation site.

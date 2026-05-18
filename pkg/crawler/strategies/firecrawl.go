@@ -5,10 +5,20 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
-	"github.com/neerajvipparla/mcp-me/internal/crawler/types"
+	"github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 )
+
+// APIKey returns the Firecrawl bearer token from the environment.
+// FIRECRAWL_API_KEY is preferred; FIRECRAWL_URL is accepted as fallback.
+func APIKey() string {
+	if k := os.Getenv("FIRECRAWL_API_KEY"); k != "" {
+		return k
+	}
+	return os.Getenv("FIRECRAWL_URL")
+}
 
 const defaultFirecrawlBaseURL = "https://api.firecrawl.dev"
 
