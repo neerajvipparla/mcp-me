@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	crawlertypes "github.com/neerajvipparla/mcp-me/internal/crawler/types"
 )
 
 // Discoverer finds all crawlable URLs for a documentation site.
@@ -14,6 +16,7 @@ type Discoverer struct {
 	maxPages int
 	filter   *Filter
 	client   *http.Client
+	handler  crawlertypes.Handler
 }
 
 // Option configures a Discoverer.
@@ -22,6 +25,14 @@ type Option func(*Discoverer)
 // WithMaxPages caps the number of URLs returned. Default is 500.
 func WithMaxPages(n int) Option {
 	return func(d *Discoverer) { d.maxPages = n }
+}
+
+// WithHandler sets a fetch strategy chain used during BFS link extraction.
+// When set, BFS fetches each page through the chain (enabling chromedp for CSR
+// sites) instead of a plain HTTP GET. Only HTML results are used for link
+// extraction; Markdown results (e.g. Firecrawl) are skipped.
+func WithHandler(h crawlertypes.Handler) Option {
+	return func(d *Discoverer) { d.handler = h }
 }
 
 // NewDiscoverer creates a Discoverer anchored to rootURL's domain.
@@ -83,7 +94,7 @@ func (d *Discoverer) bfs(ctx context.Context, rootURL string) ([]string, error) 
 		}
 		visited[url] = true
 
-		html, err := d.get(ctx, url)
+		html, err := d.fetchHTML(ctx, url)
 		if err != nil {
 			continue // skip unreachable pages
 		}
@@ -107,7 +118,23 @@ func (d *Discoverer) bfs(ctx context.Context, rootURL string) ([]string, error) 
 	return urls, nil
 }
 
-func (d *Discoverer) get(ctx context.Context, url string) (string, error) {
+// fetchHTML returns the HTML content of url for link extraction.
+// Uses the strategy chain when set (enables chromedp for CSR sites);
+// falls back to a plain HTTP GET otherwise.
+// Returns an empty string (no error) for Markdown results — link
+// extraction from Markdown is not supported.
+func (d *Discoverer) fetchHTML(ctx context.Context, url string) (string, error) {
+	if d.handler != nil {
+		result, err := d.handler.Handle(ctx, url)
+		if err != nil {
+			return "", err
+		}
+		if result.Format == crawlertypes.FormatMarkdown {
+			return "", nil
+		}
+		return result.Content, nil
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err

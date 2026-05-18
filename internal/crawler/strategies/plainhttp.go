@@ -47,12 +47,12 @@ func (h *PlainHTTPHandler) Handle(ctx context.Context, url string) (*types.Fetch
 
 	doc.Find("nav, footer, header, script, style, .sidebar, #sidebar").Remove()
 
-	html, err := doc.Html()
-	if err != nil {
+	if len(strings.TrimSpace(doc.Text())) < minContentLength {
 		return h.TryNext(ctx, url)
 	}
 
-	if len(strings.TrimSpace(html)) < minContentLength {
+	html, err := doc.Html()
+	if err != nil {
 		return h.TryNext(ctx, url)
 	}
 

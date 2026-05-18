@@ -58,9 +58,18 @@ func (f *Filter) Allow(rawURL string) bool {
 		}
 	}
 
-	// If root has a subpath (e.g., /docs), only follow URLs within it
+	// If root has a subpath (e.g., /docs), only follow URLs within it.
+	// Check for a path-segment boundary after the prefix to avoid
+	// /docs/integrations/go matching /docs/integrations/google-dataflow.
 	if f.rootPath != "" {
-		return strings.HasPrefix(lower, strings.ToLower(f.rootPath))
+		prefix := strings.ToLower(f.rootPath)
+		if !strings.HasPrefix(lower, prefix) {
+			return false
+		}
+		rest := lower[len(prefix):]
+		if rest != "" && rest[0] != '/' {
+			return false
+		}
 	}
 
 	return true
