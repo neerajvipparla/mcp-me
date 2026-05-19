@@ -12,11 +12,8 @@ import (
 )
 
 // APIKey returns the Firecrawl bearer token from the environment.
-// FIRECRAWL_API_KEY is preferred; FIRECRAWL_URL is accepted as fallback.
+// FIRECRAWL_URL is the API key.
 func APIKey() string {
-	if k := os.Getenv("FIRECRAWL_API_KEY"); k != "" {
-		return k
-	}
 	return os.Getenv("FIRECRAWL_URL")
 }
 
