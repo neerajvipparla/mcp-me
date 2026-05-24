@@ -1,3 +1,4 @@
 docs/*
 logging/*
 .env
+config.yaml
