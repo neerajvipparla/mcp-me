@@ -1,3 +1,23 @@
+// MODULE: pkg/crawler/strategies/plainhttp.go
+// PURPOSE: Owns the first-attempt fetch strategy using plain HTTP + goquery.
+//          Strips navigation/chrome noise before returning HTML. Fast and cheap —
+//          succeeds on static sites (Hugo, Jekyll, MkDocs).
+//
+// CORE DATA STRUCTURES:
+//   - PlainHTTPHandler: embeds BaseHandler; holds *http.Client (stateless, shared).
+//
+// TO MODIFY BEHAVIOR:
+//   - Add selector stripping: extend the doc.Find() call in Handle.
+//   - Change minimum content threshold: edit minContentLength const.
+//   - Adjust timeout: edit the 15*time.Second in NewPlainHTTPHandler.
+//
+// DO NOT:
+//   - Store per-request state on PlainHTTPHandler — shared across goroutines.
+//   - Increase minContentLength above what Chromedp would also trigger — the
+//     threshold is the handoff point between strategies.
+//
+// EXTENSION POINT: add additional HTML stripping selectors to the doc.Find()
+//                  call without touching any other strategy.
 package strategies
 
 import (

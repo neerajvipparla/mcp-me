@@ -1,3 +1,26 @@
+// MODULE: pkg/crawler/types/pool.go
+// PURPOSE: Owns bounded-concurrency URL fetching. Dispatches a fixed worker
+//          pool over a slice of URLs, returning one PageResult per URL in
+//          input order. Isolates per-URL failures — one error does not abort others.
+//
+// CORE DATA STRUCTURES:
+//   - CrawlPool: holds Handler chain + concurrency int. Stateless per FetchAll call.
+//   - jobs (chan job, unbuffered): backpressure channel — context cancellation stops
+//     feed loop, workers drain in-flight jobs, then wg.Wait() returns.
+//   - results ([]PageResult, len=len(urls)): pre-allocated; written by index so
+//     no mutex needed — each index is written by exactly one goroutine.
+//
+// TO MODIFY BEHAVIOR:
+//   - Change default concurrency: edit constants.CRAWLER_DEFAULT_CONCURRENCY.
+//   - Add per-URL retry: wrap p.chain.Handle in a retry loop inside the worker goroutine.
+//
+// DO NOT:
+//   - Reuse a CrawlPool across jobs with different concurrency needs — create a new one.
+//   - Replace the index-keyed results slice with a mutex-protected map without
+//     profiling first — the current design has zero lock contention.
+//
+// EXTENSION POINT: pass a different Handler chain to NewCrawlPool to swap all
+//                  strategies at once without touching pool logic.
 package types
 
 import (

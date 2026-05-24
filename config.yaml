@@ -1,0 +1,26 @@
+server:
+  port: 8080
+  host: http://localhost:8080
+
+# Qdrant connection settings (non-secret).
+# API key lives in .env → QDRANT_API_KEY.
+# If QDRANT_API_KEY is set at runtime → CloudConfig (TLS).
+# If QDRANT_API_KEY is unset         → SelfHostedConfig (no TLS).
+qdrant:
+  host: localhost   # override to your cluster host for cloud, e.g. xyz.aws.cloud.qdrant.io
+  port: 6334        # gRPC port
+
+postgres:
+  host: localhost
+  port: 5432
+  db: docsmcp
+  user: docsmcp
+  # password → DATABASE_PASSWORD in .env (or set DATABASE_URL to override entirely)
+
+crawler:
+  max_pages: 500
+  concurrency: 5
+
+worker:
+  concurrency: 3
+  batch_size: 100

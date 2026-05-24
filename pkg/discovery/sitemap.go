@@ -1,3 +1,26 @@
+// MODULE: pkg/discovery/sitemap.go
+// PURPOSE: Fetches and parses sitemap.xml (regular or sitemap index) for a
+//          documentation root URL. Tries multiple candidate paths narrowest-first
+//          so section-scoped sitemaps (e.g. /docs/sitemap.xml) are preferred over
+//          the root sitemap. Returns nil,nil when no usable sitemap is found so
+//          Discoverer can fall back to BFS.
+//
+// CORE DATA STRUCTURES:
+//   - sitemapIndex / urlset: XML decode targets; allocated per fetch, not retained.
+//   - sitemapCandidates ([]string): O(path-depth) length; built once per Discover call.
+//   - sitemapClient (package-level): shared *http.Client with 15s timeout.
+//
+// TO MODIFY BEHAVIOR:
+//   - Change fetch timeout: edit sitemapClient initialization.
+//   - Add gzip support: wrap resp.Body in gzip.NewReader before io.ReadAll.
+//   - Change candidate ordering: edit sitemapCandidates — currently narrowest first.
+//
+// DO NOT:
+//   - Store per-request state at package level (sitemapClient is stateless).
+//   - Return an error for a 404 — treat it as "no sitemap" (already the case).
+//
+// EXTENSION POINT: add robots.txt Sitemap: header discovery as a new candidate
+//                  source in sitemapCandidates without changing parseSitemap.
 package discovery
 
 import (

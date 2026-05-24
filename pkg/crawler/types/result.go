@@ -1,3 +1,25 @@
+// MODULE: pkg/crawler/types/result.go
+// PURPOSE: Defines the shared output types for all fetch strategies and the
+//          pool. These are value types — no methods, no dependencies, no state.
+//          All strategy and pool code depends on these; nothing depends on them
+//          except consumers downstream (chunker, discovery).
+//
+// CORE DATA STRUCTURES:
+//   - ContentFormat (int enum): FormatHTML / FormatMarkdown — drives ToMarkdown
+//     dispatch in pkg/crawler/helper/convert.go.
+//   - FetchResult: URL + content string + format + strategy name. Immutable after
+//     creation; passed by pointer through the handler chain.
+//   - PageResult: per-URL outcome from CrawlPool.FetchAll — wraps FetchResult
+//     with its source URL and any error.
+//
+// TO MODIFY BEHAVIOR:
+//   - Add a format: add a FormatXXX const and handle it in helper/convert.go.
+//   - Add metadata to FetchResult: add fields here; update strategy constructors.
+//
+// DO NOT:
+//   - Add methods to these types — they are plain data containers.
+//   - Import any other package from here; this package is the leaf of the
+//     crawler type dependency graph.
 package types
 
 // ContentFormat describes the format of FetchResult.Content.

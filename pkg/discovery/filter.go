@@ -1,3 +1,27 @@
+// MODULE: pkg/discovery/filter.go
+// PURPOSE: Owns URL admission for the crawler. Enforces same-domain constraint,
+//          path-prefix scoping, extension blocklist, and pattern blocklist.
+//          A URL that does not pass Allow() is never fetched or enqueued.
+//
+// CORE DATA STRUCTURES:
+//   - Filter: holds domain string, rootPath string, skip slices.
+//     Immutable after NewFilter — safe for concurrent use.
+//   - skipExtensions / skipPatterns ([]string): small fixed sets (<20 items);
+//     linear scan is acceptable — no map needed.
+//
+// TO MODIFY BEHAVIOR:
+//   - Block additional file types: add to defaultSkipExtensions.
+//   - Block additional path patterns (e.g. /tags/): add to defaultSkipPatterns.
+//   - Allow cross-domain crawling: remove the hostname check in Allow() — not
+//     recommended, scope explosion risk.
+//
+// DO NOT:
+//   - Make Filter mutable after construction (concurrent readers have no lock).
+//   - Widen the rootPath check — it is the primary scope-explosion guard.
+//
+// EXTENSION POINT: construct a custom Filter with different skip lists by
+//                  instantiating the struct directly (fields are exported-equivalent
+//                  via NewFilter options if needed in future).
 package discovery
 
 import (

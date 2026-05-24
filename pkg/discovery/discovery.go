@@ -1,3 +1,29 @@
+// MODULE: pkg/discovery/discovery.go
+// PURPOSE: Owns URL discovery for a documentation site. Tries sitemap.xml first
+//          (fast, exhaustive); falls back to BFS link extraction when no sitemap
+//          exists. Returns a deduplicated, filtered URL list capped at maxPages.
+//
+// CORE DATA STRUCTURES:
+//   - Discoverer: holds Filter + maxPages + optional Handler chain + http.Client.
+//     Stateless per Discover call — safe for concurrent use across jobs.
+//   - visited (map[string]bool, BFS only): unbounded up to maxPages; allocated
+//     fresh per Discover call, not retained on the struct.
+//   - queue ([]string, BFS only): grows up to maxPages; sequential, no sorting needed.
+//
+// TO MODIFY BEHAVIOR:
+//   - Change max pages: pass WithMaxPages option or edit default (500).
+//   - Enable JS-aware BFS: pass WithHandler(chain) — fetchHTML will use the
+//     strategy chain instead of plain HTTP.
+//   - Add new discovery source: implement as a method like bfs() and call it as
+//     a new fallback in Discover().
+//
+// DO NOT:
+//   - Store job-scoped state on Discoverer — it is reused across calls.
+//   - Import pkg/store or pkg/worker here (creates cycle).
+//
+// EXTENSION POINT: add new discovery strategies as methods on Discoverer and
+//                  call them in Discover() as additional fallbacks; Filter and
+//                  maxPages apply uniformly to all of them.
 package discovery
 
 import (

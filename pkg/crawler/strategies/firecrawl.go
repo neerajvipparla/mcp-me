@@ -1,3 +1,23 @@
+// MODULE: pkg/crawler/strategies/firecrawl.go
+// PURPOSE: Owns the paid last-resort fetch strategy using the Firecrawl API.
+//          Returns clean Markdown directly, skipping the HTML→Markdown conversion
+//          step. Only included in the chain when FIRECRAWL_URL env var is set.
+//
+// CORE DATA STRUCTURES:
+//   - FirecrawlHandler: embeds BaseHandler; holds apiKey, baseURL, *http.Client.
+//     Stateless per-request — safe for concurrent use.
+//
+// TO MODIFY BEHAVIOR:
+//   - Change base URL (e.g. self-hosted Firecrawl): use WithFirecrawlBaseURL option.
+//   - Add requested formats: extend firecrawlRequest.Formats slice.
+//   - Change timeout: replace the 30*time.Second in NewFirecrawlHandler.
+//
+// DO NOT:
+//   - Call this handler directly — wire it via DefaultFetchChain in chain.go.
+//   - Log apiKey anywhere in this file.
+//
+// EXTENSION POINT: FirecrawlOption functional options — add new options without
+//                  changing NewFirecrawlHandler's signature.
 package strategies
 
 import (

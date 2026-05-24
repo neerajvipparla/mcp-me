@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS crawl_pages;
+DROP TABLE IF EXISTS user_crawls;
+DROP TABLE IF EXISTS crawls;
+DROP TABLE IF EXISTS users;

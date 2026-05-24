@@ -1,3 +1,24 @@
+// MODULE: pkg/crawler/types/crawler_handler.go
+// PURPOSE: Defines the Handler interface and BaseHandler mixin that implement
+//          the Chain of Responsibility pattern for fetch strategies.
+//          Every strategy embeds BaseHandler to get SetNext/TryNext for free.
+//
+// CORE DATA STRUCTURES:
+//   - Handler (interface): SetNext(Handler) Handler + Handle(ctx, url) (*FetchResult, error)
+//   - BaseHandler (struct): holds `next Handler` — embedded by all strategies.
+//     Slice of handlers in Chain: O(n) wiring, O(1) per-call dispatch.
+//
+// TO MODIFY BEHAVIOR:
+//   - Add a strategy: implement Handler, embed BaseHandler, call b.TryNext when
+//     the strategy cannot handle the URL. Register in strategies/chain.go.
+//   - Change exhaustion error: edit the fmt.Errorf in TryNext.
+//
+// DO NOT:
+//   - Import any strategy package from here (would create a cycle).
+//   - Add request state to BaseHandler — it is shared across goroutines.
+//
+// EXTENSION POINT: new strategies implement Handler + embed BaseHandler;
+//                  Chain wires them without touching this file.
 package types
 
 import (

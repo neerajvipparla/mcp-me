@@ -1,3 +1,23 @@
+// MODULE: pkg/crawler/strategies/chromedp.go
+// PURPOSE: Owns the headless-Chromium fetch strategy. Handles JS-heavy sites
+//          (Docusaurus, VitePress, Next.js) where PlainHTTP returns near-empty HTML.
+//
+// CORE DATA STRUCTURES:
+//   - ChromedpHandler: embeds BaseHandler (next-chain wiring); holds allocCtx
+//     (shared across all calls — one ExecAllocator per server lifetime).
+//
+// TO MODIFY BEHAVIOR:
+//   - Change page-wait behavior: edit chromedp.Run task list in Handle.
+//   - Adjust timeout: change the 30*time.Second constant.
+//   - Tune JS-render delay: edit chromedp.Sleep duration.
+//
+// DO NOT:
+//   - Store per-request state on ChromedpHandler — it is shared across goroutines.
+//   - Create a new ExecAllocator here; it must come from cmd/server/main.go startup.
+//   - Raise concurrency without memory budget — each headless context ≈150MB.
+//
+// EXTENSION POINT: swap chromedp.Run task list to add custom CDP interactions
+//                  (e.g. scroll-to-bottom for lazy-loading) without touching chain.go.
 package strategies
 
 import (
