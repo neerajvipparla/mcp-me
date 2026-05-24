@@ -31,12 +31,17 @@ type UserDB interface {
 // CrawlDB is the minimum interface for crawl lifecycle operations.
 type CrawlDB interface {
 	FindCrawlByHashAndEmbedder(ctx context.Context, urlHash, embedderID string) (*CrawlRecord, error)
+	// FindCrawlByPageURL finds a ready crawl that already scraped this exact URL.
+	// Used for sub-page cache hits: if url1.2 was crawled under url1.0's job,
+	// a new request for url1.2 reuses url1.0's collection instead of re-crawling.
+	FindCrawlByPageURL(ctx context.Context, url string) (*CrawlRecord, error)
 	CreateCrawl(ctx context.Context, r *CrawlRecord) error
 	UpdateCrawlStatus(ctx context.Context, id, status string) error
 	UpdateCrawlReady(ctx context.Context, id string, pageCount, chunkCount int, lastModified *time.Time) error
 	GetCrawlByID(ctx context.Context, id string) (*CrawlRecord, error)
 	CreateUserCrawl(ctx context.Context, r *UserCrawlRecord) error
 	GetUserCrawlByCrawlID(ctx context.Context, crawlID string) (*UserCrawlRecord, error)
+	CreateCrawlPage(ctx context.Context, crawlID, url, title string, chunkCount int) error
 }
 
 // DB composes both interfaces. PostgresStore implements this.

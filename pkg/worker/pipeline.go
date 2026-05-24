@@ -94,7 +94,11 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		if err != nil {
 			continue
 		}
+		pageTitle := ""
 		for _, c := range chunks {
+			if pageTitle == "" {
+				pageTitle = c.HeadingPath
+			}
 			allTexts = append(allTexts, c.Text)
 			allPoints = append(allPoints, store.Point{
 				ChunkIndex:  c.ChunkIndex,
@@ -105,6 +109,8 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 				CrawlID:     p.CrawlID,
 			})
 		}
+		// Record every scraped URL so sub-page cache hits work on future requests.
+		h.db.CreateCrawlPage(ctx, p.CrawlID, r.URL, pageTitle, len(chunks))
 		totalPages++
 	}
 

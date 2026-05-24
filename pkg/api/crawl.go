@@ -53,10 +53,17 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 	urlHash := store.HashURL(req.URL)
 	embedderID := h.vs.EmbedderID()
 
-	// Cache hit: reuse existing ready collection, issue a fresh mcp_api_key.
+	// Cache hit 1: exact URL was the root of a previous crawl.
 	existing, _ := h.db.FindCrawlByHashAndEmbedder(ctx, urlHash, embedderID)
 	if existing != nil {
 		h.issueKey(c, existing.ID, "ready")
+		return
+	}
+
+	// Cache hit 2: URL was discovered and scraped as a sub-page of another crawl.
+	byPage, _ := h.db.FindCrawlByPageURL(ctx, req.URL)
+	if byPage != nil {
+		h.issueKey(c, byPage.ID, "ready")
 		return
 	}
 

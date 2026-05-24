@@ -164,6 +164,42 @@ func (s *PostgresStore) CreateUserCrawl(ctx context.Context, r *UserCrawlRecord)
 	return err
 }
 
+func (s *PostgresStore) CreateCrawlPage(ctx context.Context, crawlID, url, title string, chunkCount int) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO crawl_pages (id, crawl_id, url, title, chunk_count, crawled_at)
+		 VALUES (gen_random_uuid(), $1, $2, $3, $4, now())
+		 ON CONFLICT DO NOTHING`,
+		crawlID, url, title, chunkCount,
+	)
+	return err
+}
+
+// FindCrawlByPageURL returns the most recent ready crawl that already scraped url.
+// Returns nil, nil when not found.
+func (s *PostgresStore) FindCrawlByPageURL(ctx context.Context, url string) (*CrawlRecord, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT c.id, c.url_raw, c.url_normalized, c.url_hash, c.status, c.embedder_id,
+		        c.page_count, c.chunk_count, c.qdrant_collection, c.last_modified,
+		        c.created_at, c.ready_at
+		 FROM crawls c
+		 JOIN crawl_pages cp ON cp.crawl_id = c.id
+		 WHERE cp.url = $1 AND c.status = 'ready'
+		 ORDER BY c.ready_at DESC
+		 LIMIT 1`, url,
+	)
+	var r CrawlRecord
+	err := row.Scan(&r.ID, &r.URLRaw, &r.URLNormalized, &r.URLHash, &r.Status,
+		&r.EmbedderID, &r.PageCount, &r.ChunkCount, &r.QdrantCollection,
+		&r.LastModified, &r.CreatedAt, &r.ReadyAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
 func (s *PostgresStore) GetUserCrawlByCrawlID(ctx context.Context, crawlID string) (*UserCrawlRecord, error) {
 	row := s.pool.QueryRow(ctx,
 		`SELECT id, user_id, crawl_id, mcp_api_key_hash
