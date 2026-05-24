@@ -118,7 +118,7 @@ func main() {
 		authed.GET("/crawl/:id", crawlHandler.GetStatus)
 
 		// MCP endpoint — authenticates via mcp_api_key (bcrypt, per session)
-		tools := mcp.NewTools(vs, pg, chain)
+		tools := mcp.NewTools(vs, pg, chain, queue, cfg.Server.Host)
 		v1.POST("/mcp/:crawl_id", mcp.NewServer(tools, pg).Handle)
 	}
 

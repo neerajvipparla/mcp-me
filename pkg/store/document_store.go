@@ -1,22 +1,24 @@
 // MODULE: pkg/store/document_store.go
-// PURPOSE: Implements Store using Qdrant Cloud server-side FastEmbed (MiniLM).
-//          Owns the upsert and search paths for sentence-transformers/all-minilm-l6-v2.
-//          Qdrant embeds text on ingestion and at query time — no external HTTP call.
+// PURPOSE: Implements Store using Qdrant Cloud server-side FastEmbed.
+//          Dense vectors: sentence-transformers/all-minilm-l6-v2 (384d, cosine).
+//          Sparse vectors: Qdrant/bm25 (IDF-weighted term frequency, server-side).
+//          Search uses Prefetch(dense) + Prefetch(sparse) fused with RRF — no manual α tuning.
 //
 // CORE DATA STRUCTURES:
 //   - *qdrant.Client: shared gRPC connection, stateless per-call. Owned by main.go.
 //   - []*qdrant.PointStruct (slice, bounded by batch size): built per Upsert call, not retained.
 //
 // TO MODIFY BEHAVIOR:
-//   - Change model: update minilmModel constant — collection dims must match model output.
-//   - Change collection dims: update minilmDims — must match before any data is written.
-//   - Change distance metric: edit EnsureCollection — existing collections are unaffected.
+//   - Change dense model: update minilmModel + minilmDims — collection must be rebuilt.
+//   - Change sparse model: update bm25Model — collection must be rebuilt.
+//   - Change candidate pool size: edit candidateMult — higher = better RRF recall, more latency.
 //
 // DO NOT:
 //   - Import pkg/qdrantcfg here — client is injected; this file must not own connection logic.
 //   - Change minilmDims after a collection exists — Qdrant will reject incompatible inserts.
+//   - Use unnamed (default) VectorsConfig — all new collections use named dense+sparse vectors.
 //
-// EXTENSION POINT: implement Store interface in a new file (e.g. vector_store.go for OpenAI).
+// EXTENSION POINT: implement Store interface in a new file (e.g. openai_store.go).
 //   This file remains unchanged.
 package store
 
@@ -29,15 +31,18 @@ import (
 )
 
 const (
-	EmbedderID  = "minilm"
-	minilmModel = "sentence-transformers/all-minilm-l6-v2"
-	minilmDims  = uint64(384)
+	EmbedderID    = "minilm"
+	minilmModel   = "sentence-transformers/all-minilm-l6-v2"
+	bm25Model     = "Qdrant/bm25"
+	minilmDims    = uint64(384)
+	denseVec      = "dense"
+	sparseVec     = "sparse"
+	candidateMult = uint64(3) // fetch candidateMult*topK per leg before RRF fusion
 )
 
 // DocumentStore uses Qdrant Cloud's server-side FastEmbed inference.
-// Upsert sends text + model name — Qdrant embeds on ingestion.
-// Search wraps the query text in NewVectorInputDocument — Qdrant embeds at query time.
-// No external embedding HTTP calls required.
+// Both dense (MiniLM) and sparse (BM25) vectors are computed by Qdrant — no local model.
+// Search runs two prefetch legs (dense + sparse) fused via RRF.
 type DocumentStore struct {
 	client *qdrantgo.Client
 }
@@ -51,23 +56,42 @@ func NewDocumentStore(client *qdrantgo.Client) *DocumentStore {
 
 func (s *DocumentStore) EmbedderID() string { return EmbedderID }
 
+// EnsureCollection creates a hybrid (dense + sparse) collection if it does not exist.
+// If an old single-vector collection is detected it is dropped and rebuilt — callers
+// should treat this as a destructive migration and re-ingest their data.
 func (s *DocumentStore) EnsureCollection(ctx context.Context, name string) error {
 	exists, err := s.client.CollectionExists(ctx, name)
 	if err != nil {
 		return err
 	}
 	if exists {
-		return nil
+		info, err := s.client.GetCollectionInfo(ctx, name)
+		if err != nil {
+			return err
+		}
+		pm := info.GetConfig().GetParams().GetVectorsConfig().GetParamsMap()
+		if pm != nil {
+			if _, hasDense := pm.GetMap()[denseVec]; hasDense {
+				return nil // already the hybrid schema
+			}
+		}
+		// Old single-vector schema — drop and recreate.
+		if err := s.client.DeleteCollection(ctx, name); err != nil {
+			return fmt.Errorf("drop legacy collection %s: %w", name, err)
+		}
 	}
 	return s.client.CreateCollection(ctx, &qdrantgo.CreateCollection{
 		CollectionName: name,
-		VectorsConfig: qdrantgo.NewVectorsConfig(&qdrantgo.VectorParams{
-			Size:     minilmDims,
-			Distance: qdrantgo.Distance_Cosine,
+		VectorsConfig: qdrantgo.NewVectorsConfigMap(map[string]*qdrantgo.VectorParams{
+			denseVec: {Size: minilmDims, Distance: qdrantgo.Distance_Cosine},
+		}),
+		SparseVectorsConfig: qdrantgo.NewSparseVectorsConfig(map[string]*qdrantgo.SparseVectorParams{
+			sparseVec: {Modifier: qdrantgo.Modifier_Idf.Enum()},
 		}),
 	})
 }
 
+// Time: O(n) where n = len(texts); dominated by Qdrant gRPC round-trip + server-side embedding.
 func (s *DocumentStore) Upsert(ctx context.Context, collection string, texts []string, points []Point) error {
 	if len(texts) != len(points) {
 		return fmt.Errorf("store: texts/points mismatch %d vs %d", len(texts), len(points))
@@ -76,9 +100,9 @@ func (s *DocumentStore) Upsert(ctx context.Context, collection string, texts []s
 	for i, p := range points {
 		qpoints[i] = &qdrantgo.PointStruct{
 			Id: qdrantgo.NewIDNum(uint64(uuid.New().ID())),
-			Vectors: qdrantgo.NewVectorsDocument(&qdrantgo.Document{
-				Text:  texts[i],
-				Model: minilmModel,
+			Vectors: qdrantgo.NewVectorsMap(map[string]*qdrantgo.Vector{
+				denseVec:  qdrantgo.NewVectorDocument(&qdrantgo.Document{Text: texts[i], Model: minilmModel}),
+				sparseVec: qdrantgo.NewVectorDocument(&qdrantgo.Document{Text: texts[i], Model: bm25Model}),
 			}),
 			Payload: buildPayload(p),
 		}
@@ -90,15 +114,27 @@ func (s *DocumentStore) Upsert(ctx context.Context, collection string, texts []s
 	return err
 }
 
+// Search runs dense and sparse prefetch legs in parallel inside Qdrant, fuses with RRF.
+// Each leg fetches candidateMult*topK candidates; RRF re-ranks and returns topK.
+// Time: O(k) where k = topK; dominated by Qdrant network round-trip + two-leg server search.
 func (s *DocumentStore) Search(ctx context.Context, collection, query string, topK uint64) ([]SearchResult, error) {
+	candidateK := topK * candidateMult
+
 	resp, err := s.client.Query(ctx, &qdrantgo.QueryPoints{
 		CollectionName: collection,
-		Query: qdrantgo.NewQueryNearest(
-			qdrantgo.NewVectorInputDocument(&qdrantgo.Document{
-				Text:  query,
-				Model: minilmModel,
-			}),
-		),
+		Prefetch: []*qdrantgo.PrefetchQuery{
+			{
+				Query: qdrantgo.NewQueryDocument(&qdrantgo.Document{Text: query, Model: minilmModel}),
+				Using: qdrantgo.PtrOf(denseVec),
+				Limit: qdrantgo.PtrOf(candidateK),
+			},
+			{
+				Query: qdrantgo.NewQueryDocument(&qdrantgo.Document{Text: query, Model: bm25Model}),
+				Using: qdrantgo.PtrOf(sparseVec),
+				Limit: qdrantgo.PtrOf(candidateK),
+			},
+		},
+		Query:       qdrantgo.NewQueryFusion(qdrantgo.Fusion_RRF),
 		Limit:       qdrantgo.PtrOf(topK),
 		WithPayload: qdrantgo.NewWithPayload(true),
 	})
@@ -108,6 +144,8 @@ func (s *DocumentStore) Search(ctx context.Context, collection, query string, to
 	return scoredToResults(resp), nil
 }
 
+// GetByURL returns all stored chunks for a specific page URL via payload filter scroll.
+// Time: O(n) where n = chunks stored for pageURL; dominated by Qdrant scroll.
 func (s *DocumentStore) GetByURL(ctx context.Context, collection, pageURL string) ([]SearchResult, error) {
 	resp, err := s.client.Scroll(ctx, &qdrantgo.ScrollPoints{
 		CollectionName: collection,

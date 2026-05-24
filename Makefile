@@ -106,6 +106,12 @@ setup: infra-up migrate-up ## First-time setup: start Redis + apply migrations
 
 reset-db: migrate-drop migrate-up ## Wipe and recreate all tables — DESTRUCTIVE
 
+# ── Skills ────────────────────────────────────────────────────────────────────
+install-skill: ## Install the mcp-me Claude Code skill → ~/.claude/skills/mcp-me/
+	@mkdir -p ~/.claude/skills/mcp-me
+	@cp docs/skills/mcp-me/SKILL.md ~/.claude/skills/mcp-me/SKILL.md
+	@echo "✓ Skill installed at ~/.claude/skills/mcp-me/SKILL.md"
+
 # ── Clean ─────────────────────────────────────────────────────────────────────
 clean: ## Remove build artifacts
 	rm -rf bin/

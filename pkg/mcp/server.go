@@ -217,6 +217,18 @@ func (s *Server) callTool(ctx context.Context, crawlID, name string, args json.R
 		}
 		return toolResult{Content: []toolContent{{Type: "text", Text: fmt.Sprintf("Added %d chunks from %s", n, p.URL)}}}, nil
 
+	case "create_crawl":
+		var p struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal(args, &p)
+		res, err := s.tools.CreateCrawl(ctx, crawlID, p.URL)
+		if err != nil {
+			return nil, &rpcError{Code: -32000, Message: err.Error()}
+		}
+		b, _ := json.MarshalIndent(res, "", "  ")
+		return toolResult{Content: []toolContent{{Type: "text", Text: string(b)}}}, nil
+
 	default:
 		return nil, &rpcError{Code: -32601, Message: "tool not found: " + name}
 	}
@@ -250,11 +262,22 @@ func toolDefinitions() []gin.H {
 		},
 		{
 			"name":        "add_page",
-			"description": "Fetch, chunk, embed and add a new page to the documentation collection.",
+			"description": "Fetch, chunk, embed and add a new page to the current documentation collection.",
 			"inputSchema": gin.H{
 				"type": "object",
 				"properties": gin.H{
 					"url": gin.H{"type": "string", "description": "The page URL to fetch and add"},
+				},
+				"required": []string{"url"},
+			},
+		},
+		{
+			"name":        "create_crawl",
+			"description": "Create a new documentation collection for a different/unrelated URL. Use this when the URL topic is unrelated to the current collection (e.g. current collection is ClickHouse Go docs, new URL is Python PostgreSQL docs). Returns a new mcp_endpoint and mcp_api_key — save them to access the new collection.",
+			"inputSchema": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"url": gin.H{"type": "string", "description": "Root URL of the documentation to crawl"},
 				},
 				"required": []string{"url"},
 			},
