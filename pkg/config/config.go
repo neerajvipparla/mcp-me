@@ -48,6 +48,15 @@ type QdrantConfig struct {
 	Port int    `yaml:"port"`
 }
 
+// ResolvedHost returns the effective Qdrant host.
+// QDRANT_HOST env var takes full precedence when set (same pattern as DATABASE_URL).
+func (q QdrantConfig) ResolvedHost() string {
+	if h := os.Getenv("QDRANT_HOST"); h != "" {
+		return h
+	}
+	return q.Host
+}
+
 type PostgresConfig struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`

@@ -3,7 +3,6 @@ FROM golang:1.26-bookworm AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
-
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /server ./cmd/server
 
@@ -16,7 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV CHROMIUM_PATH=/usr/bin/chromium
 
-COPY --from=builder /server /server
+WORKDIR /app
+COPY --from=builder /server /app/server
+COPY --from=builder /app/config.yaml /app/config.yaml
 
 EXPOSE 8080
-ENTRYPOINT ["/server"]
+ENTRYPOINT ["/app/server"]

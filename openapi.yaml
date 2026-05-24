@@ -1,0 +1,432 @@
+openapi: 3.1.0
+info:
+  title: DocsMCP API
+  description: Crawls documentation URLs, embeds them into Qdrant, and exposes MCP endpoints for AI assistants.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: auth
+    description: User registration
+  - name: crawl
+    description: Crawl job submission and status
+  - name: mcp
+    description: MCP JSON-RPC endpoint for AI tool use
+
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+
+  /v1/register:
+    post:
+      tags: [auth]
+      summary: Register a new user
+      description: |
+        Creates a user account and returns a platform API key.
+        The key is shown **once** — it is never stored in plaintext and cannot be recovered.
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: you@example.com
+      responses:
+        "200":
+          description: User created — save the api_key immediately
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/crawl:
+    post:
+      tags: [crawl]
+      summary: Submit a crawl job
+      description: |
+        Enqueues a crawl job for the given URL.
+        - Cache hit (URL already crawled): returns immediately with `status: ready` and a fresh `mcp_api_key`.
+        - Cache miss: creates a new crawl job, returns `status: queued`.
+
+        The `mcp_api_key` is shown **once** — save it to authenticate MCP calls.
+      operationId: postCrawl
+      security:
+        - PlatformKeyHeader: []
+        - PlatformKeyBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  example: https://docs.pydantic.dev/latest/
+      responses:
+        "200":
+          description: Cache hit — crawl already ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CrawlResponse"
+        "202":
+          description: Accepted — crawl job enqueued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CrawlResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/crawl/{id}:
+    get:
+      tags: [crawl]
+      summary: Get crawl status
+      description: Poll until `status` is `ready` or `failed`.
+      operationId: getCrawlStatus
+      security:
+        - PlatformKeyHeader: []
+        - PlatformKeyBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+      responses:
+        "200":
+          description: Crawl record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CrawlStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/mcp/{crawl_id}:
+    post:
+      tags: [mcp]
+      summary: MCP JSON-RPC endpoint
+      description: |
+        JSON-RPC 2.0 endpoint. Authenticate with the `mcp_api_key` returned by `POST /v1/crawl`.
+
+        **Methods:**
+        - `search_docs` — semantic search over the crawled docs
+        - `get_page` — retrieve all chunks for a specific page URL
+        - `add_page` — fetch, chunk, embed, and add a new page to the collection
+      operationId: mcpHandle
+      security:
+        - MCPKeyBearer: []
+        - MCPKeyHeader: []
+      parameters:
+        - name: crawl_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RPCRequest"
+            examples:
+              search_docs:
+                summary: Search docs
+                value:
+                  jsonrpc: "2.0"
+                  id: 1
+                  method: search_docs
+                  params:
+                    query: "how to define validators"
+                    top_k: 5
+              get_page:
+                summary: Get page
+                value:
+                  jsonrpc: "2.0"
+                  id: 2
+                  method: get_page
+                  params:
+                    url: "https://docs.pydantic.dev/latest/concepts/validators/"
+              add_page:
+                summary: Add a new page
+                value:
+                  jsonrpc: "2.0"
+                  id: 3
+                  method: add_page
+                  params:
+                    url: "https://docs.pydantic.dev/latest/concepts/types/"
+      responses:
+        "200":
+          description: JSON-RPC response (errors are in the response body, not HTTP status)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RPCResponse"
+              examples:
+                search_result:
+                  summary: search_docs result
+                  value:
+                    jsonrpc: "2.0"
+                    id: 1
+                    result:
+                      - text: "Validators are..."
+                        page_url: "https://docs.pydantic.dev/latest/concepts/validators/"
+                        page_title: "Validators"
+                        heading_path: "Validators > Field validators"
+                        score: 0.91
+                method_not_found:
+                  summary: Method not found error
+                  value:
+                    jsonrpc: "2.0"
+                    id: 1
+                    error:
+                      code: -32601
+                      message: "method not found"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    PlatformKeyHeader:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Platform API key from POST /v1/register
+    PlatformKeyBearer:
+      type: http
+      scheme: bearer
+      description: Platform API key as Bearer token
+    MCPKeyBearer:
+      type: http
+      scheme: bearer
+      description: MCP API key from POST /v1/crawl
+    MCPKeyHeader:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: MCP API key from POST /v1/crawl
+
+  schemas:
+    RegisterResponse:
+      type: object
+      properties:
+        email:
+          type: string
+          example: you@example.com
+        api_key:
+          type: string
+          description: Platform API key — shown once, save immediately
+          example: a3f1c2d4e5b6...
+
+    CrawlResponse:
+      type: object
+      properties:
+        crawl_id:
+          type: string
+          format: uuid
+        mcp_endpoint:
+          type: string
+          format: uri
+          example: http://localhost:8080/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
+        mcp_api_key:
+          type: string
+          description: MCP API key — shown once, save immediately
+          example: b7e2f1a3c4d5...
+        status:
+          $ref: "#/components/schemas/CrawlStatusEnum"
+
+    CrawlStatus:
+      type: object
+      properties:
+        crawl_id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/CrawlStatusEnum"
+        page_count:
+          type: integer
+          example: 142
+        chunk_count:
+          type: integer
+          example: 1847
+
+    CrawlStatusEnum:
+      type: string
+      enum: [queued, crawling, chunking, embedding, ready, failed]
+      example: ready
+
+    RPCRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        id:
+          oneOf:
+            - type: integer
+            - type: string
+          example: 1
+        method:
+          type: string
+          enum: [search_docs, get_page, add_page]
+        params:
+          oneOf:
+            - $ref: "#/components/schemas/SearchDocsParams"
+            - $ref: "#/components/schemas/GetPageParams"
+            - $ref: "#/components/schemas/AddPageParams"
+
+    SearchDocsParams:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          example: how to define validators
+        top_k:
+          type: integer
+          default: 5
+          example: 5
+
+    GetPageParams:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          example: https://docs.pydantic.dev/latest/concepts/validators/
+
+    AddPageParams:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          example: https://docs.pydantic.dev/latest/concepts/types/
+
+    SearchResult:
+      type: object
+      properties:
+        text:
+          type: string
+        page_url:
+          type: string
+          format: uri
+        page_title:
+          type: string
+        heading_path:
+          type: string
+          example: "Validators > Field validators"
+        score:
+          type: number
+          format: float
+          example: 0.91
+
+    RPCResponse:
+      type: object
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        id:
+          oneOf:
+            - type: integer
+            - type: string
+        result:
+          description: Present on success — shape depends on method
+        error:
+          $ref: "#/components/schemas/RPCError"
+
+    RPCError:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: -32601
+        message:
+          type: string
+          example: method not found
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "Key: 'email' Error:Field validation for 'email' failed on the 'required' tag"
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "unauthorized"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "not found"
+    InternalError:
+      description: Server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "db error"

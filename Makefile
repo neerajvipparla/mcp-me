@@ -29,10 +29,10 @@ dev: ## Run with live env (no build cache) — for local iteration
 	go run $(CMD)/main.go
 
 # ── Infrastructure ────────────────────────────────────────────────────────────
-infra-up: ## Start Redis (Postgres + Qdrant managed externally)
+infra-up: ## Start Redis only (Postgres + Qdrant managed externally)
 	docker compose up -d redis
 
-infra-down: ## Stop all local Docker services
+infra-down: ## Stop all Docker services
 	docker compose down
 
 infra-logs: ## Tail logs from all Docker services
@@ -40,6 +40,15 @@ infra-logs: ## Tail logs from all Docker services
 
 infra-up-all: ## Start all services including local Postgres + Qdrant (dev only)
 	docker compose up -d
+
+up: ## Build and start app + nginx + redis
+	docker compose up -d --build app nginx redis
+
+down: ## Stop app + nginx
+	docker compose stop app nginx
+
+logs: ## Tail app logs
+	docker compose logs -f app
 
 # ── Migrations ────────────────────────────────────────────────────────────────
 migrate-up: ## Apply all pending migrations

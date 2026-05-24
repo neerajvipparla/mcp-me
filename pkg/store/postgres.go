@@ -167,7 +167,8 @@ func (s *PostgresStore) CreateUserCrawl(ctx context.Context, r *UserCrawlRecord)
 func (s *PostgresStore) GetUserCrawlByCrawlID(ctx context.Context, crawlID string) (*UserCrawlRecord, error) {
 	row := s.pool.QueryRow(ctx,
 		`SELECT id, user_id, crawl_id, mcp_api_key_hash
-		 FROM user_crawls WHERE crawl_id=$1`, crawlID,
+		 FROM user_crawls WHERE crawl_id=$1
+		 ORDER BY created_at DESC LIMIT 1`, crawlID,
 	)
 	var r UserCrawlRecord
 	err := row.Scan(&r.ID, &r.UserID, &r.CrawlID, &r.MCPAPIKeyHash)

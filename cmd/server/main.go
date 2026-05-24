@@ -23,9 +23,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/chromedp/chromedp"
 	"github.com/gin-gonic/gin"
@@ -60,7 +65,7 @@ func main() {
 	// From() selects CloudConfig (TLS + API key) or SelfHostedConfig (no TLS)
 	// based solely on whether qdrantAPIKey is non-empty.
 	qdrantClient, err := qdrantcfg.NewClient(
-		qdrantcfg.From(cfg.Qdrant.Host, cfg.Qdrant.Port, qdrantAPIKey),
+		qdrantcfg.From(cfg.Qdrant.ResolvedHost(), cfg.Qdrant.Port, qdrantAPIKey),
 	)
 	if err != nil {
 		log.Fatal("qdrant:", err)
@@ -96,6 +101,7 @@ func main() {
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	r := gin.Default()
+	r.SetTrustedProxies(nil)
 
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
@@ -117,8 +123,27 @@ func main() {
 	}
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-	log.Printf("listening %s | qdrant: %T | embedder: %s", addr, qdrantcfg.From(cfg.Qdrant.Host, cfg.Qdrant.Port, qdrantAPIKey), vs.EmbedderID())
-	if err := r.Run(addr); err != nil {
-		log.Fatal(err)
+	log.Printf("listening %s | qdrant: %T | embedder: %s", addr, qdrantcfg.From(cfg.Qdrant.ResolvedHost(), cfg.Qdrant.Port, qdrantAPIKey), vs.EmbedderID())
+
+	srv := &http.Server{Addr: addr, Handler: r}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal("http server:", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("shutting down...")
+	asynqSrv.Shutdown()
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutCtx); err != nil {
+		log.Fatal("forced shutdown:", err)
 	}
+	log.Println("stopped")
 }

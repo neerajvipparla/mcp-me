@@ -7,8 +7,8 @@ server:
 # If QDRANT_API_KEY is set at runtime → CloudConfig (TLS).
 # If QDRANT_API_KEY is unset         → SelfHostedConfig (no TLS).
 qdrant:
-  host: localhost   # override to your cluster host for cloud, e.g. xyz.aws.cloud.qdrant.io
-  port: 6334        # gRPC port
+  host: localhost
+  port: 6334
 
 postgres:
   host: localhost

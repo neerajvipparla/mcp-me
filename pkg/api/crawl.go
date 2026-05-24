@@ -97,12 +97,15 @@ func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string) {
 		c.JSON(500, gin.H{"error": "key hash failed"})
 		return
 	}
-	h.db.CreateUserCrawl(c.Request.Context(), &store.UserCrawlRecord{
+	if err := h.db.CreateUserCrawl(c.Request.Context(), &store.UserCrawlRecord{
 		ID:            uuid.NewString(),
 		UserID:        c.GetString("user_id"),
 		CrawlID:       crawlID,
 		MCPAPIKeyHash: string(keyHash),
-	})
+	}); err != nil {
+		c.JSON(500, gin.H{"error": "failed to store mcp key"})
+		return
+	}
 
 	code := 202
 	if status == "ready" {
