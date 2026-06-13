@@ -168,11 +168,24 @@ func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string) {
 }
 
 func (h *CrawlHandler) GetStatus(c *gin.Context) {
-	cr, err := h.db.GetCrawlByID(c.Request.Context(), c.Param("id"))
+	ctx := c.Request.Context()
+	id := c.Param("id")
+	cr, err := h.db.GetCrawlByID(ctx, id)
 	if err != nil {
+		logger.Warn(ctx, "crawl not found",
+			ion.String("file", "crawl.go"),
+			ion.String("func", "GetStatus"),
+			ion.String("crawl_id", id),
+		)
 		c.JSON(404, gin.H{"error": "not found"})
 		return
 	}
+	logger.Info(ctx, "status polled",
+		ion.String("file", "crawl.go"),
+		ion.String("func", "GetStatus"),
+		ion.String("crawl_id", cr.ID),
+		ion.String("status", cr.Status),
+	)
 	c.JSON(200, gin.H{
 		"crawl_id":    cr.ID,
 		"status":      cr.Status,
