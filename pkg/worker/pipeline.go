@@ -161,7 +161,7 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 			skipped++
 			continue
 		}
-		chunks, err := chunker.Split(md)
+		chunks, err := chunker.Split(ctx, r.URL, md)
 		if err != nil {
 			h.logger.Warn(ctx, "chunking failed: skipping page",
 				ion.String("file", "pipeline.go"),

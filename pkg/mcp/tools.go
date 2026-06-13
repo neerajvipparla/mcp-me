@@ -32,6 +32,7 @@ import (
 	crawlertypes "github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 	"github.com/neerajvipparla/mcp-me/pkg/store"
 	"github.com/neerajvipparla/mcp-me/pkg/worker"
+	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -60,11 +61,23 @@ func NewTools(vs store.Store, db store.CrawlDB, chain crawlertypes.Handler, queu
 // Otherwise enqueues a full crawl job and returns status "queued".
 // The returned mcp_api_key is shown once — agent must store it to access the new collection.
 func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string) (*CreateCrawlResult, error) {
+	tracer := t.logger.Tracer("mcp")
+	ctx, span := tracer.Start(ctx, "mcp.create_crawl")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("url", rootURL),
+		attribute.String("current_crawl_id", currentCrawlID),
+	)
+
 	embedderID := t.vs.EmbedderID()
 	urlHash := store.HashURL(rootURL)
 
 	// Cache hit 1: exact root URL already crawled.
 	if existing, _ := t.db.FindCrawlByHashAndEmbedder(ctx, urlHash, embedderID); existing != nil {
+		span.SetAttributes(
+			attribute.Bool("cache_hit", true),
+			attribute.String("crawl_id", existing.ID),
+		)
 		t.logger.Info(ctx, "cache hit",
 			ion.String("file", "tools.go"),
 			ion.String("func", "CreateCrawl"),
@@ -77,6 +90,10 @@ func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string)
 
 	// Cache hit 2: URL already scraped as a sub-page of another crawl.
 	if byPage, _ := t.db.FindCrawlByPageURL(ctx, rootURL); byPage != nil {
+		span.SetAttributes(
+			attribute.Bool("cache_hit", true),
+			attribute.String("crawl_id", byPage.ID),
+		)
 		t.logger.Info(ctx, "cache hit",
 			ion.String("file", "tools.go"),
 			ion.String("func", "CreateCrawl"),
@@ -88,6 +105,10 @@ func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string)
 	}
 
 	crawlID := uuid.NewString()
+	span.SetAttributes(
+		attribute.Bool("cache_hit", false),
+		attribute.String("crawl_id", crawlID),
+	)
 	collection := store.CollectionName(urlHash, embedderID)
 	if err := t.db.CreateCrawl(ctx, &store.CrawlRecord{
 		ID:               crawlID,
@@ -98,6 +119,8 @@ func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string)
 		EmbedderID:       embedderID,
 		QdrantCollection: collection,
 	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
 		t.logger.Error(ctx, "db error", err,
 			ion.String("file", "tools.go"),
 			ion.String("func", "CreateCrawl"),
@@ -168,15 +191,31 @@ const minSearchScore = float32(0.01)
 
 // Time: O(k) where k = topK; dominated by Qdrant network round-trip.
 func (t *Tools) SearchDocs(ctx context.Context, crawlID, query string, topK uint64) ([]store.SearchResult, error) {
+	tracer := t.logger.Tracer("mcp")
+	ctx, span := tracer.Start(ctx, "mcp.search_docs")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("crawl_id", crawlID),
+		attribute.String("query", query),
+		attribute.Int64("top_k", int64(topK)),
+	)
+
 	cr, err := t.db.GetCrawlByID(ctx, crawlID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, "crawl not found")
 		return nil, fmt.Errorf("crawl not found")
 	}
 	if cr.Status != "ready" {
-		return nil, fmt.Errorf("crawl not ready: %s", cr.Status)
+		err := fmt.Errorf("crawl not ready: %s", cr.Status)
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
+		return nil, err
 	}
 	results, err := t.vs.Search(ctx, cr.QdrantCollection, query, topK)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
 		return nil, err
 	}
 	filtered := results[:0]
@@ -186,6 +225,7 @@ func (t *Tools) SearchDocs(ctx context.Context, crawlID, query string, topK uint
 		}
 	}
 	if len(filtered) == 0 {
+		span.SetAttributes(attribute.Int("results", 0))
 		t.logger.Warn(ctx, "search: no results above threshold",
 			ion.String("file", "tools.go"),
 			ion.String("func", "SearchDocs"),
@@ -194,6 +234,7 @@ func (t *Tools) SearchDocs(ctx context.Context, crawlID, query string, topK uint
 		)
 		return nil, fmt.Errorf("no relevant documentation found for this query")
 	}
+	span.SetAttributes(attribute.Int("results", len(filtered)))
 	t.logger.Info(ctx, "search complete",
 		ion.String("file", "tools.go"),
 		ion.String("func", "SearchDocs"),
@@ -206,30 +247,63 @@ func (t *Tools) SearchDocs(ctx context.Context, crawlID, query string, topK uint
 
 // Time: O(n) where n = chunks stored for pageURL; dominated by Qdrant scroll.
 func (t *Tools) GetPage(ctx context.Context, crawlID, pageURL string) ([]store.SearchResult, error) {
+	tracer := t.logger.Tracer("mcp")
+	ctx, span := tracer.Start(ctx, "mcp.get_page")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("crawl_id", crawlID),
+		attribute.String("page_url", pageURL),
+	)
+
 	cr, err := t.db.GetCrawlByID(ctx, crawlID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, "crawl not found")
 		return nil, fmt.Errorf("crawl not found")
 	}
-	return t.vs.GetByURL(ctx, cr.QdrantCollection, pageURL)
+	results, err := t.vs.GetByURL(ctx, cr.QdrantCollection, pageURL)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
+		return nil, err
+	}
+	span.SetAttributes(attribute.Int("chunks", len(results)))
+	return results, nil
 }
 
 // Time: O(c) where c = chunks in the fetched page; dominated by fetch + Qdrant upsert.
 func (t *Tools) AddPage(ctx context.Context, crawlID, pageURL string) (int, error) {
+	tracer := t.logger.Tracer("mcp")
+	ctx, span := tracer.Start(ctx, "mcp.add_page")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("crawl_id", crawlID),
+		attribute.String("page_url", pageURL),
+	)
+
 	cr, err := t.db.GetCrawlByID(ctx, crawlID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, "crawl not found")
 		return 0, fmt.Errorf("crawl not found")
 	}
 
 	result, err := t.chain.Handle(ctx, pageURL)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
 		return 0, fmt.Errorf("fetch: %w", err)
 	}
 	md, err := helper.ToMarkdown(result)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
 		return 0, err
 	}
-	chunks, err := chunker.Split(md)
+	chunks, err := chunker.Split(ctx, pageURL, md)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
 		return 0, err
 	}
 
@@ -247,7 +321,10 @@ func (t *Tools) AddPage(ctx context.Context, crawlID, pageURL string) (int, erro
 		}
 	}
 	if err := t.vs.Upsert(ctx, cr.QdrantCollection, texts, points); err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
 		return 0, err
 	}
+	span.SetAttributes(attribute.Int("chunks_added", len(chunks)))
 	return len(chunks), nil
 }

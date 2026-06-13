@@ -27,10 +27,15 @@
 package chunker
 
 import (
+	"context"
 	"strings"
 
 	tiktoken "github.com/pkoukk/tiktoken-go"
+	"github.com/neerajvipparla/mcp-me/logging"
+	"go.opentelemetry.io/otel/attribute"
 )
+
+var logger = logging.Get(logging.TopicChunker)
 
 const (
 	targetTokens  = 500
@@ -46,15 +51,25 @@ type Chunk struct {
 
 // Time: O(n) where n = total tokens in markdown; Space: O(n)
 // DS: []section slice built in one pass, then []Chunk built in second pass.
-func Split(markdown string) ([]Chunk, error) {
+func Split(ctx context.Context, sourceURL, markdown string) ([]Chunk, error) {
+	tracer := logger.Tracer("chunker")
+	ctx, span := tracer.Start(ctx, "chunker.split")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("source_url", sourceURL),
+		attribute.Int("input_bytes", len(markdown)),
+	)
+
 	enc, err := tiktoken.GetEncoding("cl100k_base")
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 
 	sections := splitByHeadings(markdown)
 	var chunks []Chunk
 	idx := 0
+	sizeSplit := false
 
 	for _, sec := range sections {
 		if strings.TrimSpace(sec.body) == "" {
@@ -69,10 +84,20 @@ func Split(markdown string) ([]Chunk, error) {
 			})
 			idx++
 		} else {
+			sizeSplit = true
 			sub := splitBySize(sec.body, sec.headingPath, enc, &idx)
 			chunks = append(chunks, sub...)
 		}
 	}
+
+	strategy := "heading"
+	if sizeSplit {
+		strategy = "mixed"
+	}
+	span.SetAttributes(
+		attribute.Int("chunks", len(chunks)),
+		attribute.String("strategy", strategy),
+	)
 	return chunks, nil
 }
 

@@ -36,6 +36,7 @@ import (
 	"github.com/neerajvipparla/ion"
 	"github.com/neerajvipparla/mcp-me/logging"
 	crawlertypes "github.com/neerajvipparla/mcp-me/pkg/crawler/types"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Discoverer finds all crawlable URLs for a documentation site.
@@ -85,12 +86,27 @@ func NewDiscoverer(rootURL string, opts ...Option) (*Discoverer, error) {
 // Discover returns all crawlable URLs rooted at rootURL.
 // Tries sitemap.xml first; uses BFS link extraction as fallback.
 func (d *Discoverer) Discover(ctx context.Context, rootURL string) ([]string, error) {
-	urls, err := FetchSitemap(ctx, rootURL)
+	tracer := d.logger.Tracer("discovery")
+	ctx, span := tracer.Start(ctx, "discovery")
+	defer span.End()
+	span.SetAttributes(attribute.String("root_url", rootURL))
+
+	sitemapCtx, sitemapSpan := tracer.Start(ctx, "discovery.sitemap")
+	urls, err := FetchSitemap(sitemapCtx, rootURL)
 	if err != nil {
+		sitemapSpan.RecordError(err)
+		sitemapSpan.SetStatus(ion.StatusError, err.Error())
+		sitemapSpan.End()
 		return nil, err
 	}
 	if len(urls) > 0 {
 		filtered := d.applyFilter(urls)
+		sitemapSpan.SetAttributes(
+			attribute.String("url", rootURL),
+			attribute.Int("urls_found", len(filtered)),
+		)
+		sitemapSpan.End()
+		span.SetAttributes(attribute.String("strategy", "sitemap"))
 		d.logger.Info(ctx, "sitemap found",
 			ion.String("file", "discovery.go"),
 			ion.String("func", "Discover"),
@@ -99,12 +115,16 @@ func (d *Discoverer) Discover(ctx context.Context, rootURL string) ([]string, er
 		)
 		return filtered, nil
 	}
+	sitemapSpan.SetAttributes(attribute.Int("urls_found", 0))
+	sitemapSpan.End()
+
+	span.SetAttributes(attribute.String("strategy", "bfs"))
 	d.logger.Info(ctx, "no sitemap: falling back to bfs",
 		ion.String("file", "discovery.go"),
 		ion.String("func", "Discover"),
 		ion.String("url", rootURL),
 	)
-	return d.bfs(ctx, rootURL)
+	return d.bfs(ctx, tracer, rootURL)
 }
 
 func (d *Discoverer) applyFilter(urls []string) []string {
@@ -117,7 +137,11 @@ func (d *Discoverer) applyFilter(urls []string) []string {
 	return out
 }
 
-func (d *Discoverer) bfs(ctx context.Context, rootURL string) ([]string, error) {
+func (d *Discoverer) bfs(ctx context.Context, tracer ion.Tracer, rootURL string) ([]string, error) {
+	ctx, span := tracer.Start(ctx, "discovery.bfs")
+	defer span.End()
+	span.SetAttributes(attribute.String("root_url", rootURL))
+
 	visited := make(map[string]bool)
 	queue := []string{rootURL}
 
@@ -157,6 +181,10 @@ func (d *Discoverer) bfs(ctx context.Context, rootURL string) ([]string, error) 
 	for u := range visited {
 		urls = append(urls, u)
 	}
+	span.SetAttributes(
+		attribute.Int("pages_visited", len(visited)),
+		attribute.Int("urls_found", len(urls)),
+	)
 	d.logger.Info(ctx, "bfs complete",
 		ion.String("file", "discovery.go"),
 		ion.String("func", "bfs"),
