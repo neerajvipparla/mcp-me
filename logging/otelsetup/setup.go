@@ -40,7 +40,7 @@ var (
 
 // Defaults. Override before the first Setup call (they are read once).
 var (
-	ServiceName = "ThebeDB-Testsuite"
+	ServiceName = "MCP-ME"
 	Version     = "0.0.1"
 	Development = true
 	Level       = "info"

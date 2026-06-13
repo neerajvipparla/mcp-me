@@ -1,5 +1,5 @@
 // MODULE: logging/slogbridge
-// PURPOSE: Adapt slog.Handler onto ion.Logger so slog producers (ThebeDB)
+// PURPOSE: Adapt slog.Handler onto ion.Logger so slog producers
 // are captured by the ion pipeline unchanged (every slog record maps to
 // exactly one ion call at the equivalent level).
 //
@@ -39,7 +39,7 @@ type Handler struct {
 var _ slog.Handler = (*Handler)(nil)
 
 // New wraps an ion logger as a slog handler. Pass a topic-scoped child
-// (e.g. the "thebedb" logger) so bridged rows are attributable.
+// (e.g. the "MCP-ME" logger) so bridged rows are attributable.
 func New(lg ion.Logger) *Handler {
 	return &Handler{lg: lg}
 }
