@@ -20,8 +20,13 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/neerajvipparla/ion"
+	"github.com/neerajvipparla/mcp-me/logging"
 	"github.com/neerajvipparla/mcp-me/pkg/store"
 )
+
+// logger is the shared structured logger for the api package.
+var logger *ion.Ion = logging.Get(logging.TopicAPI)
 
 // PlatformKeyAuth verifies the platform API key on every protected route.
 // Accepts X-API-Key header or Authorization: Bearer <key>.
@@ -30,11 +35,21 @@ func PlatformKeyAuth(db store.UserDB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key := extractAPIKey(c)
 		if key == "" {
+			logger.Warn(c.Request.Context(), "auth failed: missing api key",
+				ion.String("file", "middleware.go"),
+				ion.String("func", "PlatformKeyAuth"),
+				ion.String("path", c.FullPath()),
+			)
 			c.AbortWithStatusJSON(401, gin.H{"error": "missing api key"})
 			return
 		}
 		userID, err := db.FindUserByKeyHash(c.Request.Context(), hashAPIKey(key))
 		if err != nil || userID == "" {
+			logger.Warn(c.Request.Context(), "auth failed: invalid api key",
+				ion.String("file", "middleware.go"),
+				ion.String("func", "PlatformKeyAuth"),
+				ion.String("path", c.FullPath()),
+			)
 			c.AbortWithStatusJSON(401, gin.H{"error": "invalid api key"})
 			return
 		}

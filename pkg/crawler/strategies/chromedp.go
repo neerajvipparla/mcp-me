@@ -26,7 +26,9 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/neerajvipparla/ion"
 	"github.com/neerajvipparla/mcp-me/pkg/crawler/types"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type ChromedpHandler struct {
@@ -39,6 +41,12 @@ func NewChromedpHandler(allocCtx context.Context) types.Handler {
 }
 
 func (h *ChromedpHandler) Handle(ctx context.Context, url string) (*types.FetchResult, error) {
+	tracer := crawlerLogger.Tracer("fetch.chromedp")
+	ctx, span := tracer.Start(ctx, "fetch.chromedp")
+	defer span.End()
+	span.SetAttributes(attribute.String("url", url))
+
+	start := time.Now()
 	taskCtx, taskCancel := chromedp.NewContext(h.allocCtx)
 	defer taskCancel()
 
@@ -53,6 +61,7 @@ func (h *ChromedpHandler) Handle(ctx context.Context, url string) (*types.FetchR
 		chromedp.OuterHTML("html", &html),
 	)
 	if err != nil {
+		span.RecordError(err)
 		return h.TryNext(ctx, url)
 	}
 
@@ -60,6 +69,13 @@ func (h *ChromedpHandler) Handle(ctx context.Context, url string) (*types.FetchR
 		return h.TryNext(ctx, url)
 	}
 
+	span.SetAttributes(attribute.Int64("render_ms", time.Since(start).Milliseconds()))
+	crawlerLogger.Info(ctx, "fetch success",
+		ion.String("file", "chromedp.go"),
+		ion.String("func", "Handle"),
+		ion.String("strategy", "chromedp"),
+		ion.String("url", url),
+	)
 	return &types.FetchResult{
 		URL:      url,
 		Content:  html,

@@ -20,8 +20,11 @@ package strategies
 import (
 	"context"
 
+	"github.com/neerajvipparla/mcp-me/logging"
 	"github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 )
+
+var crawlerLogger = logging.Get(logging.TopicCrawler)
 
 // DefaultFetchChain wires PlainHTTP → Chromedp → Firecrawl (when key is set).
 // allocCtx must come from chromedp.NewExecAllocator at server startup —

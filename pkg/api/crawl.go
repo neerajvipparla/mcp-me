@@ -24,8 +24,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/neerajvipparla/ion"
 	"github.com/neerajvipparla/mcp-me/pkg/store"
 	"github.com/neerajvipparla/mcp-me/pkg/worker"
+	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -50,12 +52,28 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+	tracer := logger.Tracer("api")
+	ctx, span := tracer.Start(ctx, "api.post_crawl")
+	defer span.End()
+	span.SetAttributes(attribute.String("url", req.URL))
+
 	urlHash := store.HashURL(req.URL)
 	embedderID := h.vs.EmbedderID()
 
 	// Cache hit 1: exact URL was the root of a previous crawl.
 	existing, _ := h.db.FindCrawlByHashAndEmbedder(ctx, urlHash, embedderID)
 	if existing != nil {
+		span.SetAttributes(
+			attribute.String("result", "cache_hit_exact"),
+			attribute.String("crawl_id", existing.ID),
+		)
+		logger.Info(ctx, "cache hit",
+			ion.String("file", "crawl.go"),
+			ion.String("func", "PostCrawl"),
+			ion.String("type", "exact url match"),
+			ion.String("url", req.URL),
+			ion.String("crawl_id", existing.ID),
+		)
 		h.issueKey(c, existing.ID, "ready")
 		return
 	}
@@ -63,6 +81,17 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 	// Cache hit 2: URL was discovered and scraped as a sub-page of another crawl.
 	byPage, _ := h.db.FindCrawlByPageURL(ctx, req.URL)
 	if byPage != nil {
+		span.SetAttributes(
+			attribute.String("result", "cache_hit_subpage"),
+			attribute.String("crawl_id", byPage.ID),
+		)
+		logger.Info(ctx, "cache hit",
+			ion.String("file", "crawl.go"),
+			ion.String("func", "PostCrawl"),
+			ion.String("type", "subpage match"),
+			ion.String("url", req.URL),
+			ion.String("crawl_id", byPage.ID),
+		)
 		h.issueKey(c, byPage.ID, "ready")
 		return
 	}
@@ -78,10 +107,22 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 		EmbedderID:       embedderID,
 		QdrantCollection: collection,
 	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
+		logger.Error(ctx, "db error", err,
+			ion.String("file", "crawl.go"),
+			ion.String("func", "PostCrawl"),
+			ion.String("op", "create crawl"),
+			ion.String("url", req.URL),
+		)
 		c.JSON(500, gin.H{"error": "db error"})
 		return
 	}
 
+	span.SetAttributes(
+		attribute.String("result", "queued"),
+		attribute.String("crawl_id", crawlID),
+	)
 	payload, _ := json.Marshal(worker.CrawlPayload{
 		CrawlID:    crawlID,
 		URL:        req.URL,
@@ -91,6 +132,13 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 		asynq.MaxRetry(3),
 		asynq.Queue("default"),
 	))
+	logger.Info(ctx, "crawl queued",
+		ion.String("file", "crawl.go"),
+		ion.String("func", "PostCrawl"),
+		ion.String("crawl_id", crawlID),
+		ion.String("url", req.URL),
+		ion.String("collection", collection),
+	)
 
 	h.issueKey(c, crawlID, "queued")
 }
@@ -98,18 +146,31 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 // issueKey creates a user_crawls row, bcrypt-hashes the mcp_api_key,
 // and writes the response. mcp_api_key plaintext is never stored.
 func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string) {
+	ctx := c.Request.Context()
 	mcpKey := generateToken()
 	keyHash, err := bcrypt.GenerateFromPassword([]byte(mcpKey), bcrypt.DefaultCost)
 	if err != nil {
+		logger.Error(ctx, "key generation failed", err,
+			ion.String("file", "crawl.go"),
+			ion.String("func", "issueKey"),
+			ion.String("op", "bcrypt"),
+			ion.String("crawl_id", crawlID),
+		)
 		c.JSON(500, gin.H{"error": "key hash failed"})
 		return
 	}
-	if err := h.db.CreateUserCrawl(c.Request.Context(), &store.UserCrawlRecord{
+	if err := h.db.CreateUserCrawl(ctx, &store.UserCrawlRecord{
 		ID:            uuid.NewString(),
 		UserID:        c.GetString("user_id"),
 		CrawlID:       crawlID,
 		MCPAPIKeyHash: string(keyHash),
 	}); err != nil {
+		logger.Error(ctx, "db error", err,
+			ion.String("file", "crawl.go"),
+			ion.String("func", "issueKey"),
+			ion.String("op", "store mcp key"),
+			ion.String("crawl_id", crawlID),
+		)
 		c.JSON(500, gin.H{"error": "failed to store mcp key"})
 		return
 	}
@@ -120,18 +181,40 @@ func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string) {
 	}
 	c.JSON(code, gin.H{
 		"crawl_id":     crawlID,
-		"mcp_endpoint": fmt.Sprintf("%s/mcp/%s", h.host, crawlID),
+		"mcp_endpoint": fmt.Sprintf("%s/v1/mcp/%s", h.host, crawlID),
 		"mcp_api_key":  mcpKey, // shown once, never logged
 		"status":       status,
 	})
 }
 
 func (h *CrawlHandler) GetStatus(c *gin.Context) {
-	cr, err := h.db.GetCrawlByID(c.Request.Context(), c.Param("id"))
+	ctx := c.Request.Context()
+	id := c.Param("id")
+
+	tracer := logger.Tracer("api")
+	ctx, span := tracer.Start(ctx, "api.get_status")
+	defer span.End()
+	span.SetAttributes(attribute.String("crawl_id", id))
+
+	cr, err := h.db.GetCrawlByID(ctx, id)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, "crawl not found")
+		logger.Warn(ctx, "crawl not found",
+			ion.String("file", "crawl.go"),
+			ion.String("func", "GetStatus"),
+			ion.String("crawl_id", id),
+		)
 		c.JSON(404, gin.H{"error": "not found"})
 		return
 	}
+	span.SetAttributes(attribute.String("status", cr.Status))
+	logger.Info(ctx, "status polled",
+		ion.String("file", "crawl.go"),
+		ion.String("func", "GetStatus"),
+		ion.String("crawl_id", cr.ID),
+		ion.String("status", cr.Status),
+	)
 	c.JSON(200, gin.H{
 		"crawl_id":    cr.ID,
 		"status":      cr.Status,

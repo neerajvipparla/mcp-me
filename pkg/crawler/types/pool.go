@@ -26,9 +26,15 @@ package types
 import (
 	"context"
 	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/neerajvipparla/mcp-me/logging"
 	"github.com/neerajvipparla/mcp-me/types/constants"
+	"go.opentelemetry.io/otel/attribute"
 )
+
+var poolLogger = logging.Get(logging.TopicCrawler)
 
 // CrawlPool fetches multiple URLs through the handler chain using a fixed
 // pool of worker goroutines. One failure does not affect others.
@@ -55,21 +61,37 @@ func NewCrawlPool(chain Handler, concurrency int) *CrawlPool {
 // in PageResult.Err. In-flight fetches receive the same ctx and should return
 // promptly on cancellation.
 func (p *CrawlPool) FetchAll(ctx context.Context, urls []string) []PageResult {
+	tracer := poolLogger.Tracer("pool")
+	ctx, span := tracer.Start(ctx, "pool.fetch_all")
+	defer span.End()
+
 	results := make([]PageResult, len(urls))
 	if len(urls) == 0 {
+		span.SetAttributes(
+			attribute.Int("total_urls", 0),
+			attribute.Int("concurrency", p.concurrency),
+		)
 		return results
 	}
-
-	type job struct {
-		i   int
-		url string
-	}
-	jobs := make(chan job)
 
 	workers := p.concurrency
 	if workers > len(urls) {
 		workers = len(urls)
 	}
+	span.SetAttributes(
+		attribute.Int("total_urls", len(urls)),
+		attribute.Int("concurrency", workers),
+	)
+
+	type job struct {
+		i        int
+		url      string
+		queuedAt time.Time
+	}
+	jobs := make(chan job)
+
+	var succeeded, failed atomic.Int64
+	var maxQueueWaitMs atomic.Int64
 
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
@@ -77,8 +99,17 @@ func (p *CrawlPool) FetchAll(ctx context.Context, urls []string) []PageResult {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
+				waitMs := time.Since(j.queuedAt).Milliseconds()
+				if waitMs > maxQueueWaitMs.Load() {
+					maxQueueWaitMs.Store(waitMs)
+				}
 				result, err := p.chain.Handle(ctx, j.url)
 				results[j.i] = PageResult{URL: j.url, Result: result, Err: err}
+				if err != nil {
+					failed.Add(1)
+				} else {
+					succeeded.Add(1)
+				}
 			}
 		}()
 	}
@@ -89,12 +120,19 @@ feed:
 		case <-ctx.Done():
 			for k := i; k < len(urls); k++ {
 				results[k] = PageResult{URL: urls[k], Err: ctx.Err()}
+				failed.Add(1)
 			}
 			break feed
-		case jobs <- job{i: i, url: url}:
+		case jobs <- job{i: i, url: url, queuedAt: time.Now()}:
 		}
 	}
 	close(jobs)
 	wg.Wait()
+
+	span.SetAttributes(
+		attribute.Int64("succeeded", succeeded.Load()),
+		attribute.Int64("failed", failed.Load()),
+		attribute.Int64("max_queue_wait_ms", maxQueueWaitMs.Load()),
+	)
 	return results
 }

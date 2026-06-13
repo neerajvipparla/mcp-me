@@ -1,5 +1,4 @@
 docs/*
-logging/*
 .env
 config.yaml
 .DS_Store

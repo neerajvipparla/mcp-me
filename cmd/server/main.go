@@ -35,6 +35,8 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
+	"github.com/neerajvipparla/ion"
+	"github.com/neerajvipparla/mcp-me/logging"
 	"github.com/neerajvipparla/mcp-me/pkg/api"
 	"github.com/neerajvipparla/mcp-me/pkg/config"
 	"github.com/neerajvipparla/mcp-me/pkg/crawler/strategies"
@@ -46,12 +48,18 @@ import (
 
 func main() {
 	ctx := context.Background()
+	logger := logging.Get(logging.TopicServer)
 
 	// ── Config (non-secret) ──────────────────────────────────────────────────
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
 		log.Fatal("config:", err)
 	}
+	logger.Info(ctx, "config loaded",
+		ion.String("file", "main.go"),
+		ion.String("func", "main"),
+		ion.String("port", fmt.Sprintf("%d", cfg.Server.Port)),
+	)
 
 	// ── Secrets (env vars) ───────────────────────────────────────────────────
 	qdrantAPIKey := os.Getenv("QDRANT_API_KEY")
@@ -64,20 +72,36 @@ func main() {
 	// ── Qdrant client ────────────────────────────────────────────────────────
 	// From() selects CloudConfig (TLS + API key) or SelfHostedConfig (no TLS)
 	// based solely on whether qdrantAPIKey is non-empty.
-	qdrantClient, err := qdrantcfg.NewClient(
-		qdrantcfg.From(cfg.Qdrant.ResolvedHost(), cfg.Qdrant.Port, qdrantAPIKey),
-	)
+	qdrantCfg := qdrantcfg.From(cfg.Qdrant.ResolvedHost(), cfg.Qdrant.Port, qdrantAPIKey)
+	qdrantClient, err := qdrantcfg.NewClient(qdrantCfg)
 	if err != nil {
+		logger.Error(ctx, "qdrant connect failed", err,
+			ion.String("file", "main.go"),
+			ion.String("func", "main"),
+		)
 		log.Fatal("qdrant:", err)
 	}
+	logger.Info(ctx, "qdrant connected",
+		ion.String("file", "main.go"),
+		ion.String("func", "main"),
+		ion.String("mode", fmt.Sprintf("%T", qdrantCfg)),
+	)
 
 	vs := store.NewDocumentStore(qdrantClient)
 
 	// ── Postgres ─────────────────────────────────────────────────────────────
 	pg, err := store.NewPostgresStore(ctx, cfg.Postgres.DSN(dbPassword))
 	if err != nil {
+		logger.Error(ctx, "postgres connect failed", err,
+			ion.String("file", "main.go"),
+			ion.String("func", "main"),
+		)
 		log.Fatal("postgres:", err)
 	}
+	logger.Info(ctx, "postgres connected",
+		ion.String("file", "main.go"),
+		ion.String("func", "main"),
+	)
 
 	// ── Shared chromedp allocator ────────────────────────────────────────────
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, chromedp.DefaultExecAllocatorOptions[:]...)
@@ -96,6 +120,12 @@ func main() {
 			log.Fatal("asynq worker:", err)
 		}
 	}()
+	logger.Info(ctx, "worker started",
+		ion.String("file", "main.go"),
+		ion.String("func", "main"),
+		ion.String("concurrency", fmt.Sprintf("%d", cfg.Worker.Concurrency)),
+		ion.String("redis", redisDSN),
+	)
 
 	queue := asynq.NewClient(asynq.RedisClientOpt{Addr: redisDSN})
 
@@ -123,7 +153,12 @@ func main() {
 	}
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-	log.Printf("listening %s | qdrant: %T | embedder: %s", addr, qdrantcfg.From(cfg.Qdrant.ResolvedHost(), cfg.Qdrant.Port, qdrantAPIKey), vs.EmbedderID())
+	logger.Info(ctx, "server listening",
+		ion.String("file", "main.go"),
+		ion.String("func", "main"),
+		ion.String("addr", addr),
+		ion.String("embedder", vs.EmbedderID()),
+	)
 
 	srv := &http.Server{Addr: addr, Handler: r}
 
@@ -137,13 +172,24 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("shutting down...")
+	logger.Info(ctx, "shutdown signal received",
+		ion.String("file", "main.go"),
+		ion.String("func", "main"),
+	)
 	asynqSrv.Shutdown()
 
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutCtx); err != nil {
+		logger.Error(ctx, "forced shutdown", err,
+			ion.String("file", "main.go"),
+			ion.String("func", "main"),
+		)
 		log.Fatal("forced shutdown:", err)
 	}
-	log.Println("stopped")
+	logger.Info(ctx, "server stopped",
+		ion.String("file", "main.go"),
+		ion.String("func", "main"),
+	)
+	logging.NewAsyncLogger().Shutdown()
 }
