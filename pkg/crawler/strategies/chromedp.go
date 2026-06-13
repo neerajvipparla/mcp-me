@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/neerajvipparla/ion"
 	"github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 )
 
@@ -60,6 +61,12 @@ func (h *ChromedpHandler) Handle(ctx context.Context, url string) (*types.FetchR
 		return h.TryNext(ctx, url)
 	}
 
+	crawlerLogger.Info(ctx, "fetch success",
+		ion.String("file", "chromedp.go"),
+		ion.String("func", "Handle"),
+		ion.String("strategy", "chromedp"),
+		ion.String("url", url),
+	)
 	return &types.FetchResult{
 		URL:      url,
 		Content:  html,

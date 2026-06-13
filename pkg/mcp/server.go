@@ -25,6 +25,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/neerajvipparla/ion"
+	"github.com/neerajvipparla/mcp-me/logging"
 	"github.com/neerajvipparla/mcp-me/pkg/store"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -58,12 +60,13 @@ type toolResult struct {
 }
 
 type Server struct {
-	tools *Tools
-	db    store.CrawlDB
+	tools  *Tools
+	db     store.CrawlDB
+	logger *ion.Ion
 }
 
 func NewServer(tools *Tools, db store.CrawlDB) *Server {
-	return &Server{tools: tools, db: db}
+	return &Server{tools: tools, db: db, logger: logging.Get(logging.TopicMCP)}
 }
 
 func (s *Server) Handle(c *gin.Context) {
@@ -78,18 +81,36 @@ func (s *Server) Handle(c *gin.Context) {
 		key = c.GetHeader("X-API-Key")
 	}
 	if key == "" {
+		s.logger.Warn(c.Request.Context(), "auth failed",
+			ion.String("file", "server.go"),
+			ion.String("func", "Handle"),
+			ion.String("type", "missing mcp_api_key"),
+			ion.String("crawl_id", crawlID),
+		)
 		c.JSON(401, gin.H{"error": "missing mcp_api_key"})
 		return
 	}
 
 	uc, err := s.db.GetUserCrawlByCrawlID(c.Request.Context(), crawlID)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(uc.MCPAPIKeyHash), []byte(key)) != nil {
+		s.logger.Warn(c.Request.Context(), "auth failed",
+			ion.String("file", "server.go"),
+			ion.String("func", "Handle"),
+			ion.String("type", "invalid mcp_api_key"),
+			ion.String("crawl_id", crawlID),
+		)
 		c.JSON(401, gin.H{"error": "invalid mcp_api_key"})
 		return
 	}
 
 	var req rpcRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		s.logger.Warn(c.Request.Context(), "bad request",
+			ion.String("file", "server.go"),
+			ion.String("func", "Handle"),
+			ion.String("type", "invalid json-rpc"),
+			ion.String("crawl_id", crawlID),
+		)
 		c.JSON(400, gin.H{"error": "invalid json-rpc request"})
 		return
 	}
@@ -119,6 +140,12 @@ func (s *Server) Handle(c *gin.Context) {
 			Arguments json.RawMessage `json:"arguments"`
 		}
 		json.Unmarshal(req.Params, &p)
+		s.logger.Info(ctx, "tool called",
+			ion.String("file", "server.go"),
+			ion.String("func", "Handle"),
+			ion.String("tool", p.Name),
+			ion.String("crawl_id", crawlID),
+		)
 		result, rpcErr = s.callTool(ctx, crawlID, p.Name, p.Arguments)
 
 	// ── Legacy direct methods (curl-friendly) ─────────────────────────────────
@@ -163,6 +190,12 @@ func (s *Server) Handle(c *gin.Context) {
 		}
 
 	default:
+		s.logger.Warn(ctx, "method not found",
+			ion.String("file", "server.go"),
+			ion.String("func", "Handle"),
+			ion.String("method", req.Method),
+			ion.String("crawl_id", crawlID),
+		)
 		rpcErr = &rpcError{Code: -32601, Message: "method not found"}
 	}
 

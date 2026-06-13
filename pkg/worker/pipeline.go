@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/neerajvipparla/ion"
+	"github.com/neerajvipparla/mcp-me/logging"
 	"github.com/neerajvipparla/mcp-me/pkg/chunker"
 	"github.com/neerajvipparla/mcp-me/pkg/crawler/helper"
 	crawlertypes "github.com/neerajvipparla/mcp-me/pkg/crawler/types"
@@ -37,13 +39,14 @@ import (
 const batchSize = 100
 
 type PipelineHandler struct {
-	db    store.CrawlDB
-	vs    store.Store
-	chain crawlertypes.Handler
+	db     store.CrawlDB
+	vs     store.Store
+	chain  crawlertypes.Handler
+	logger *ion.Ion
 }
 
 func NewPipelineHandler(db store.CrawlDB, vs store.Store, chain crawlertypes.Handler) *PipelineHandler {
-	return &PipelineHandler{db: db, vs: vs, chain: chain}
+	return &PipelineHandler{db: db, vs: vs, chain: chain, logger: logging.Get(logging.TopicWorker)}
 }
 
 // Time: O(p·c) where p = pages crawled, c = avg chunks per page; Space: O(p·c)
@@ -54,12 +57,24 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		return err
 	}
 
+	h.logger.Info(ctx, "pipeline started",
+		ion.String("file", "pipeline.go"),
+		ion.String("func", "ProcessTask"),
+		ion.String("crawl_id", p.CrawlID),
+		ion.String("url", p.URL),
+	)
+
 	collection := store.CollectionName(store.HashURL(p.URL), h.vs.EmbedderID())
 	if err := h.vs.EnsureCollection(ctx, collection); err != nil {
 		return fmt.Errorf("ensure collection: %w", err)
 	}
 
 	h.db.UpdateCrawlStatus(ctx, p.CrawlID, "crawling")
+	h.logger.Info(ctx, "status: crawling",
+		ion.String("file", "pipeline.go"),
+		ion.String("func", "ProcessTask"),
+		ion.String("crawl_id", p.CrawlID),
+	)
 
 	d, err := discovery.NewDiscoverer(p.URL,
 		discovery.WithMaxPages(500),
@@ -72,26 +87,62 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	if err != nil {
 		return err
 	}
+	h.logger.Info(ctx, "discovery complete",
+		ion.String("file", "pipeline.go"),
+		ion.String("func", "ProcessTask"),
+		ion.String("crawl_id", p.CrawlID),
+		ion.String("url_count", fmt.Sprintf("%d", len(urls))),
+	)
 
 	pool := crawlertypes.NewCrawlPool(h.chain, 5)
 	results := pool.FetchAll(ctx, urls)
 
 	h.db.UpdateCrawlStatus(ctx, p.CrawlID, "chunking")
+	h.logger.Info(ctx, "status: chunking",
+		ion.String("file", "pipeline.go"),
+		ion.String("func", "ProcessTask"),
+		ion.String("crawl_id", p.CrawlID),
+	)
 
 	var allTexts []string
 	var allPoints []store.Point
 	totalPages := 0
+	skipped := 0
 
 	for _, r := range results {
 		if r.Err != nil {
+			h.logger.Warn(ctx, "fetch failed: skipping page",
+				ion.String("file", "pipeline.go"),
+				ion.String("func", "ProcessTask"),
+				ion.String("crawl_id", p.CrawlID),
+				ion.String("url", r.URL),
+				ion.String("error", r.Err.Error()),
+			)
+			skipped++
 			continue
 		}
 		md, err := helper.ToMarkdown(r.Result)
 		if err != nil {
+			h.logger.Warn(ctx, "markdown conversion failed: skipping page",
+				ion.String("file", "pipeline.go"),
+				ion.String("func", "ProcessTask"),
+				ion.String("crawl_id", p.CrawlID),
+				ion.String("url", r.URL),
+				ion.String("error", err.Error()),
+			)
+			skipped++
 			continue
 		}
 		chunks, err := chunker.Split(md)
 		if err != nil {
+			h.logger.Warn(ctx, "chunking failed: skipping page",
+				ion.String("file", "pipeline.go"),
+				ion.String("func", "ProcessTask"),
+				ion.String("crawl_id", p.CrawlID),
+				ion.String("url", r.URL),
+				ion.String("error", err.Error()),
+			)
+			skipped++
 			continue
 		}
 		pageTitle := ""
@@ -114,7 +165,21 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		totalPages++
 	}
 
+	h.logger.Info(ctx, "chunking complete",
+		ion.String("file", "pipeline.go"),
+		ion.String("func", "ProcessTask"),
+		ion.String("crawl_id", p.CrawlID),
+		ion.String("pages", fmt.Sprintf("%d", totalPages)),
+		ion.String("skipped", fmt.Sprintf("%d", skipped)),
+		ion.String("chunks", fmt.Sprintf("%d", len(allTexts))),
+	)
+
 	h.db.UpdateCrawlStatus(ctx, p.CrawlID, "embedding")
+	h.logger.Info(ctx, "status: embedding",
+		ion.String("file", "pipeline.go"),
+		ion.String("func", "ProcessTask"),
+		ion.String("crawl_id", p.CrawlID),
+	)
 
 	for i := 0; i < len(allTexts); i += batchSize {
 		end := i + batchSize
@@ -122,11 +187,27 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 			end = len(allTexts)
 		}
 		if err := h.vs.Upsert(ctx, collection, allTexts[i:end], allPoints[i:end]); err != nil {
+			h.logger.Error(ctx, "upsert failed", err,
+				ion.String("file", "pipeline.go"),
+				ion.String("func", "ProcessTask"),
+				ion.String("crawl_id", p.CrawlID),
+				ion.String("batch", fmt.Sprintf("%d", i/batchSize)),
+			)
 			return fmt.Errorf("upsert batch %d: %w", i/batchSize, err)
 		}
 	}
 
-	return h.db.UpdateCrawlReady(ctx, p.CrawlID, totalPages, len(allTexts), fetchLastModified(p.URL))
+	if err := h.db.UpdateCrawlReady(ctx, p.CrawlID, totalPages, len(allTexts), fetchLastModified(p.URL)); err != nil {
+		return err
+	}
+	h.logger.Info(ctx, "pipeline done",
+		ion.String("file", "pipeline.go"),
+		ion.String("func", "ProcessTask"),
+		ion.String("crawl_id", p.CrawlID),
+		ion.String("pages", fmt.Sprintf("%d", totalPages)),
+		ion.String("chunks", fmt.Sprintf("%d", len(allTexts))),
+	)
+	return nil
 }
 
 func fetchLastModified(rawURL string) *time.Time {

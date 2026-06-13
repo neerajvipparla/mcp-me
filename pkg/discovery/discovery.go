@@ -33,6 +33,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/neerajvipparla/ion"
+	"github.com/neerajvipparla/mcp-me/logging"
 	crawlertypes "github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 )
 
@@ -43,6 +45,7 @@ type Discoverer struct {
 	filter   *Filter
 	client   *http.Client
 	handler  crawlertypes.Handler
+	logger   *ion.Ion
 }
 
 // Option configures a Discoverer.
@@ -71,6 +74,7 @@ func NewDiscoverer(rootURL string, opts ...Option) (*Discoverer, error) {
 		maxPages: 500,
 		filter:   filter,
 		client:   &http.Client{Timeout: 15 * time.Second},
+		logger:   logging.Get(logging.TopicDiscovery),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -86,8 +90,20 @@ func (d *Discoverer) Discover(ctx context.Context, rootURL string) ([]string, er
 		return nil, err
 	}
 	if len(urls) > 0 {
-		return d.applyFilter(urls), nil
+		filtered := d.applyFilter(urls)
+		d.logger.Info(ctx, "sitemap found",
+			ion.String("file", "discovery.go"),
+			ion.String("func", "Discover"),
+			ion.String("url", rootURL),
+			ion.String("url_count", fmt.Sprintf("%d", len(filtered))),
+		)
+		return filtered, nil
 	}
+	d.logger.Info(ctx, "no sitemap: falling back to bfs",
+		ion.String("file", "discovery.go"),
+		ion.String("func", "Discover"),
+		ion.String("url", rootURL),
+	)
 	return d.bfs(ctx, rootURL)
 }
 
@@ -141,6 +157,12 @@ func (d *Discoverer) bfs(ctx context.Context, rootURL string) ([]string, error) 
 	for u := range visited {
 		urls = append(urls, u)
 	}
+	d.logger.Info(ctx, "bfs complete",
+		ion.String("file", "discovery.go"),
+		ion.String("func", "bfs"),
+		ion.String("root_url", rootURL),
+		ion.String("url_count", fmt.Sprintf("%d", len(urls))),
+	)
 	return urls, nil
 }
 

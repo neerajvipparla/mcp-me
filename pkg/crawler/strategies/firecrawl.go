@@ -28,6 +28,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/neerajvipparla/ion"
 	"github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 )
 
@@ -108,6 +109,12 @@ func (h *FirecrawlHandler) Handle(ctx context.Context, url string) (*types.Fetch
 		return h.TryNext(ctx, url)
 	}
 
+	crawlerLogger.Info(ctx, "fetch success",
+		ion.String("file", "firecrawl.go"),
+		ion.String("func", "Handle"),
+		ion.String("strategy", "firecrawl"),
+		ion.String("url", url),
+	)
 	return &types.FetchResult{
 		URL:      url,
 		Content:  result.Data.Markdown,

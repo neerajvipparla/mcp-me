@@ -27,6 +27,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/neerajvipparla/ion"
+	"github.com/neerajvipparla/mcp-me/logging"
 	qdrantgo "github.com/qdrant/go-client/qdrant"
 )
 
@@ -45,13 +47,14 @@ const (
 // Search runs two prefetch legs (dense + sparse) fused via RRF.
 type DocumentStore struct {
 	client *qdrantgo.Client
+	logger *ion.Ion
 }
 
 // Compile-time proof that DocumentStore satisfies the Store interface.
 var _ Store = (*DocumentStore)(nil)
 
 func NewDocumentStore(client *qdrantgo.Client) *DocumentStore {
-	return &DocumentStore{client: client}
+	return &DocumentStore{client: client, logger: logging.Get(logging.TopicStore)}
 }
 
 func (s *DocumentStore) EmbedderID() string { return EmbedderID }
@@ -72,14 +75,29 @@ func (s *DocumentStore) EnsureCollection(ctx context.Context, name string) error
 		pm := info.GetConfig().GetParams().GetVectorsConfig().GetParamsMap()
 		if pm != nil {
 			if _, hasDense := pm.GetMap()[denseVec]; hasDense {
+				s.logger.Info(ctx, "collection ready",
+					ion.String("file", "document_store.go"),
+					ion.String("func", "EnsureCollection"),
+					ion.String("collection", name),
+				)
 				return nil // already the hybrid schema
 			}
 		}
 		// Old single-vector schema — drop and recreate.
+		s.logger.Warn(ctx, "legacy collection detected: migrating",
+			ion.String("file", "document_store.go"),
+			ion.String("func", "EnsureCollection"),
+			ion.String("collection", name),
+		)
 		if err := s.client.DeleteCollection(ctx, name); err != nil {
 			return fmt.Errorf("drop legacy collection %s: %w", name, err)
 		}
 	}
+	s.logger.Info(ctx, "creating collection",
+		ion.String("file", "document_store.go"),
+		ion.String("func", "EnsureCollection"),
+		ion.String("collection", name),
+	)
 	return s.client.CreateCollection(ctx, &qdrantgo.CreateCollection{
 		CollectionName: name,
 		VectorsConfig: qdrantgo.NewVectorsConfigMap(map[string]*qdrantgo.VectorParams{
@@ -111,7 +129,22 @@ func (s *DocumentStore) Upsert(ctx context.Context, collection string, texts []s
 		CollectionName: collection,
 		Points:         qpoints,
 	})
-	return err
+	if err != nil {
+		s.logger.Error(ctx, "upsert failed", err,
+			ion.String("file", "document_store.go"),
+			ion.String("func", "Upsert"),
+			ion.String("collection", collection),
+			ion.String("count", fmt.Sprintf("%d", len(points))),
+		)
+		return err
+	}
+	s.logger.Info(ctx, "upsert complete",
+		ion.String("file", "document_store.go"),
+		ion.String("func", "Upsert"),
+		ion.String("collection", collection),
+		ion.String("count", fmt.Sprintf("%d", len(points))),
+	)
+	return nil
 }
 
 // Search runs dense and sparse prefetch legs in parallel inside Qdrant, fuses with RRF.

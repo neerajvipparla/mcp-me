@@ -21,6 +21,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/neerajvipparla/ion"
 	"github.com/neerajvipparla/mcp-me/pkg/store"
 )
 
@@ -41,8 +42,14 @@ func (h *RegisterHandler) Register(c *gin.Context) {
 		return
 	}
 
+	ctx := c.Request.Context()
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
+		logger.Error(ctx, "key generation failed", err,
+			ion.String("file", "register.go"),
+			ion.String("func", "Register"),
+			ion.String("op", "rand.Read"),
+		)
 		c.JSON(500, gin.H{"error": "key generation failed"})
 		return
 	}
@@ -51,14 +58,26 @@ func (h *RegisterHandler) Register(c *gin.Context) {
 	hash := sha256.Sum256([]byte(key))
 	keyHash := hex.EncodeToString(hash[:])
 
-	if err := h.db.CreateUser(c.Request.Context(), &store.UserRecord{
+	if err := h.db.CreateUser(ctx, &store.UserRecord{
 		ID:                 uuid.NewString(),
 		Email:              req.Email,
 		PlatformAPIKeyHash: keyHash,
 	}); err != nil {
+		logger.Error(ctx, "db error", err,
+			ion.String("file", "register.go"),
+			ion.String("func", "Register"),
+			ion.String("op", "create user"),
+			ion.String("email", req.Email),
+		)
 		c.JSON(500, gin.H{"error": "db error"})
 		return
 	}
+
+	logger.Info(ctx, "user registered",
+		ion.String("file", "register.go"),
+		ion.String("func", "Register"),
+		ion.String("email", req.Email),
+	)
 
 	// Plaintext key returned once — never stored, never logged.
 	c.JSON(200, gin.H{

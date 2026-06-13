@@ -25,6 +25,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/neerajvipparla/ion"
+	"github.com/neerajvipparla/mcp-me/logging"
 	"github.com/neerajvipparla/mcp-me/pkg/chunker"
 	"github.com/neerajvipparla/mcp-me/pkg/crawler/helper"
 	crawlertypes "github.com/neerajvipparla/mcp-me/pkg/crawler/types"
@@ -41,15 +43,16 @@ type CreateCrawlResult struct {
 }
 
 type Tools struct {
-	vs    store.Store
-	db    store.CrawlDB
-	chain crawlertypes.Handler
-	queue *asynq.Client
-	host  string
+	vs     store.Store
+	db     store.CrawlDB
+	chain  crawlertypes.Handler
+	queue  *asynq.Client
+	host   string
+	logger *ion.Ion
 }
 
 func NewTools(vs store.Store, db store.CrawlDB, chain crawlertypes.Handler, queue *asynq.Client, host string) *Tools {
-	return &Tools{vs: vs, db: db, chain: chain, queue: queue, host: host}
+	return &Tools{vs: vs, db: db, chain: chain, queue: queue, host: host, logger: logging.Get(logging.TopicMCP)}
 }
 
 // CreateCrawl starts a new crawl collection for a root URL.
@@ -62,11 +65,25 @@ func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string)
 
 	// Cache hit 1: exact root URL already crawled.
 	if existing, _ := t.db.FindCrawlByHashAndEmbedder(ctx, urlHash, embedderID); existing != nil {
+		t.logger.Info(ctx, "cache hit",
+			ion.String("file", "tools.go"),
+			ion.String("func", "CreateCrawl"),
+			ion.String("type", "exact url match"),
+			ion.String("url", rootURL),
+			ion.String("crawl_id", existing.ID),
+		)
 		return t.issueKey(ctx, currentCrawlID, existing.ID, rootURL, "ready")
 	}
 
 	// Cache hit 2: URL already scraped as a sub-page of another crawl.
 	if byPage, _ := t.db.FindCrawlByPageURL(ctx, rootURL); byPage != nil {
+		t.logger.Info(ctx, "cache hit",
+			ion.String("file", "tools.go"),
+			ion.String("func", "CreateCrawl"),
+			ion.String("type", "subpage match"),
+			ion.String("url", rootURL),
+			ion.String("crawl_id", byPage.ID),
+		)
 		return t.issueKey(ctx, currentCrawlID, byPage.ID, rootURL, "ready")
 	}
 
@@ -81,6 +98,12 @@ func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string)
 		EmbedderID:       embedderID,
 		QdrantCollection: collection,
 	}); err != nil {
+		t.logger.Error(ctx, "db error", err,
+			ion.String("file", "tools.go"),
+			ion.String("func", "CreateCrawl"),
+			ion.String("op", "create crawl"),
+			ion.String("url", rootURL),
+		)
 		return nil, fmt.Errorf("create crawl: %w", err)
 	}
 
@@ -93,6 +116,12 @@ func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string)
 		asynq.MaxRetry(3),
 		asynq.Queue("default"),
 	))
+	t.logger.Info(ctx, "crawl queued",
+		ion.String("file", "tools.go"),
+		ion.String("func", "CreateCrawl"),
+		ion.String("crawl_id", crawlID),
+		ion.String("url", rootURL),
+	)
 
 	return t.issueKey(ctx, currentCrawlID, crawlID, rootURL, "queued")
 }
@@ -157,8 +186,21 @@ func (t *Tools) SearchDocs(ctx context.Context, crawlID, query string, topK uint
 		}
 	}
 	if len(filtered) == 0 {
+		t.logger.Warn(ctx, "search: no results above threshold",
+			ion.String("file", "tools.go"),
+			ion.String("func", "SearchDocs"),
+			ion.String("crawl_id", crawlID),
+			ion.String("query", query),
+		)
 		return nil, fmt.Errorf("no relevant documentation found for this query")
 	}
+	t.logger.Info(ctx, "search complete",
+		ion.String("file", "tools.go"),
+		ion.String("func", "SearchDocs"),
+		ion.String("crawl_id", crawlID),
+		ion.String("query", query),
+		ion.String("results", fmt.Sprintf("%d", len(filtered))),
+	)
 	return filtered, nil
 }
 
