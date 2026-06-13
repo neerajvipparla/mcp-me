@@ -34,6 +34,7 @@ import (
 	crawlertypes "github.com/neerajvipparla/mcp-me/pkg/crawler/types"
 	"github.com/neerajvipparla/mcp-me/pkg/discovery"
 	"github.com/neerajvipparla/mcp-me/pkg/store"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const batchSize = 100
@@ -57,6 +58,17 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		return err
 	}
 
+	tracer := h.logger.Tracer("pipeline")
+
+	// Root span — covers the entire job.
+	ctx, rootSpan := tracer.Start(ctx, "pipeline")
+	defer rootSpan.End()
+	rootSpan.SetAttributes(
+		attribute.String("crawl_id", p.CrawlID),
+		attribute.String("url", p.URL),
+		attribute.String("embedder_id", h.vs.EmbedderID()),
+	)
+
 	h.logger.Info(ctx, "pipeline started",
 		ion.String("file", "pipeline.go"),
 		ion.String("func", "ProcessTask"),
@@ -65,9 +77,16 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	)
 
 	collection := store.CollectionName(store.HashURL(p.URL), h.vs.EmbedderID())
+
+	_, colSpan := tracer.Start(ctx, "pipeline.ensure_collection")
+	colSpan.SetAttributes(attribute.String("collection", collection))
 	if err := h.vs.EnsureCollection(ctx, collection); err != nil {
+		colSpan.RecordError(err)
+		colSpan.SetStatus(ion.StatusError, err.Error())
+		colSpan.End()
 		return fmt.Errorf("ensure collection: %w", err)
 	}
+	colSpan.End()
 
 	h.db.UpdateCrawlStatus(ctx, p.CrawlID, "crawling")
 	h.logger.Info(ctx, "status: crawling",
@@ -83,10 +102,18 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	if err != nil {
 		return err
 	}
-	urls, err := d.Discover(ctx, p.URL)
+
+	discCtx, discSpan := tracer.Start(ctx, "pipeline.discovery")
+	urls, err := d.Discover(discCtx, p.URL)
 	if err != nil {
+		discSpan.RecordError(err)
+		discSpan.SetStatus(ion.StatusError, err.Error())
+		discSpan.End()
 		return err
 	}
+	discSpan.SetAttributes(attribute.Int("url_count", len(urls)))
+	discSpan.End()
+
 	h.logger.Info(ctx, "discovery complete",
 		ion.String("file", "pipeline.go"),
 		ion.String("func", "ProcessTask"),
@@ -94,6 +121,7 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		ion.String("url_count", fmt.Sprintf("%d", len(urls))),
 	)
 
+	_, fetchSpan := tracer.Start(ctx, "pipeline.fetch_pool")
 	pool := crawlertypes.NewCrawlPool(h.chain, 5)
 	results := pool.FetchAll(ctx, urls)
 
@@ -164,6 +192,20 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		h.db.CreateCrawlPage(ctx, p.CrawlID, r.URL, pageTitle, len(chunks))
 		totalPages++
 	}
+	fetchSpan.SetAttributes(
+		attribute.Int("total", len(results)),
+		attribute.Int("succeeded", totalPages),
+		attribute.Int("skipped", skipped),
+	)
+	fetchSpan.End()
+
+	_, chunkSpan := tracer.Start(ctx, "pipeline.chunking")
+	chunkSpan.SetAttributes(
+		attribute.Int("pages", totalPages),
+		attribute.Int("chunks", len(allTexts)),
+		attribute.Int("skipped", skipped),
+	)
+	chunkSpan.End()
 
 	h.logger.Info(ctx, "chunking complete",
 		ion.String("file", "pipeline.go"),
@@ -181,6 +223,12 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		ion.String("crawl_id", p.CrawlID),
 	)
 
+	_, embedSpan := tracer.Start(ctx, "pipeline.embedding")
+	embedSpan.SetAttributes(
+		attribute.Int("chunks", len(allTexts)),
+		attribute.String("collection", collection),
+	)
+	batches := 0
 	for i := 0; i < len(allTexts); i += batchSize {
 		end := i + batchSize
 		if end > len(allTexts) {
@@ -193,9 +241,15 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 				ion.String("crawl_id", p.CrawlID),
 				ion.String("batch", fmt.Sprintf("%d", i/batchSize)),
 			)
+			embedSpan.RecordError(err)
+			embedSpan.SetStatus(ion.StatusError, err.Error())
+			embedSpan.End()
 			return fmt.Errorf("upsert batch %d: %w", i/batchSize, err)
 		}
+		batches++
 	}
+	embedSpan.SetAttributes(attribute.Int("batches", batches))
+	embedSpan.End()
 
 	if err := h.db.UpdateCrawlReady(ctx, p.CrawlID, totalPages, len(allTexts), fetchLastModified(p.URL)); err != nil {
 		return err

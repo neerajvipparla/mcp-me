@@ -30,6 +30,7 @@ import (
 
 	"github.com/neerajvipparla/ion"
 	"github.com/neerajvipparla/mcp-me/pkg/crawler/types"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // APIKey returns the Firecrawl bearer token from the environment.
@@ -78,6 +79,11 @@ func NewFirecrawlHandler(apiKey string, opts ...FirecrawlOption) types.Handler {
 }
 
 func (h *FirecrawlHandler) Handle(ctx context.Context, url string) (*types.FetchResult, error) {
+	tracer := crawlerLogger.Tracer("fetch.firecrawl")
+	ctx, span := tracer.Start(ctx, "fetch.firecrawl")
+	defer span.End()
+	span.SetAttributes(attribute.String("url", url))
+
 	body, _ := json.Marshal(firecrawlRequest{URL: url, Formats: []string{"markdown"}})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.baseURL+"/v1/scrape", bytes.NewReader(body))
@@ -89,10 +95,12 @@ func (h *FirecrawlHandler) Handle(ctx context.Context, url string) (*types.Fetch
 
 	resp, err := h.client.Do(req)
 	if err != nil {
+		span.RecordError(err)
 		return h.TryNext(ctx, url)
 	}
 	defer resp.Body.Close()
 
+	span.SetAttributes(attribute.Int("status_code", resp.StatusCode))
 	switch resp.StatusCode {
 	case http.StatusTooManyRequests, http.StatusUnauthorized:
 		return h.TryNext(ctx, url)
@@ -103,6 +111,7 @@ func (h *FirecrawlHandler) Handle(ctx context.Context, url string) (*types.Fetch
 
 	var result firecrawlResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		span.RecordError(err)
 		return h.TryNext(ctx, url)
 	}
 	if !result.Success || result.Data.Markdown == "" {

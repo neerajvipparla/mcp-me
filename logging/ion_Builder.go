@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/neerajvipparla/mcp-me/logging/otelsetup"
 
@@ -133,5 +134,7 @@ func (al *AsyncLogger) Shutdown() error {
 	if al.GlobalLogger == nil {
 		return fmt.Errorf("logging: global logger not initialized")
 	}
-	return otelsetup.Shutdown(context.Background(), al.GlobalLogger)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return otelsetup.Shutdown(ctx, al.GlobalLogger)
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/neerajvipparla/ion"
 	"github.com/neerajvipparla/mcp-me/pkg/crawler/types"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const minContentLength = 500
@@ -45,6 +46,11 @@ func NewPlainHTTPHandler() types.Handler {
 }
 
 func (h *PlainHTTPHandler) Handle(ctx context.Context, url string) (*types.FetchResult, error) {
+	tracer := crawlerLogger.Tracer("fetch.plainhttp")
+	ctx, span := tracer.Start(ctx, "fetch.plainhttp")
+	defer span.End()
+	span.SetAttributes(attribute.String("url", url))
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return h.TryNext(ctx, url)
@@ -58,6 +64,7 @@ func (h *PlainHTTPHandler) Handle(ctx context.Context, url string) (*types.Fetch
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		span.SetAttributes(attribute.Int("status_code", resp.StatusCode))
 		return h.TryNext(ctx, url)
 	}
 
@@ -77,6 +84,10 @@ func (h *PlainHTTPHandler) Handle(ctx context.Context, url string) (*types.Fetch
 		return h.TryNext(ctx, url)
 	}
 
+	span.SetAttributes(
+		attribute.Int("status_code", resp.StatusCode),
+		attribute.Int("content_bytes", len(html)),
+	)
 	crawlerLogger.Info(ctx, "fetch success",
 		ion.String("file", "plainhttp.go"),
 		ion.String("func", "Handle"),

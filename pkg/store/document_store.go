@@ -30,6 +30,7 @@ import (
 	"github.com/neerajvipparla/ion"
 	"github.com/neerajvipparla/mcp-me/logging"
 	qdrantgo "github.com/qdrant/go-client/qdrant"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -63,18 +64,28 @@ func (s *DocumentStore) EmbedderID() string { return EmbedderID }
 // If an old single-vector collection is detected it is dropped and rebuilt — callers
 // should treat this as a destructive migration and re-ingest their data.
 func (s *DocumentStore) EnsureCollection(ctx context.Context, name string) error {
+	tracer := s.logger.Tracer("store")
+	ctx, span := tracer.Start(ctx, "store.ensure_collection")
+	defer span.End()
+	span.SetAttributes(attribute.String("collection", name))
+
 	exists, err := s.client.CollectionExists(ctx, name)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
 		return err
 	}
 	if exists {
 		info, err := s.client.GetCollectionInfo(ctx, name)
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(ion.StatusError, err.Error())
 			return err
 		}
 		pm := info.GetConfig().GetParams().GetVectorsConfig().GetParamsMap()
 		if pm != nil {
 			if _, hasDense := pm.GetMap()[denseVec]; hasDense {
+				span.SetAttributes(attribute.String("action", "ready"))
 				s.logger.Info(ctx, "collection ready",
 					ion.String("file", "document_store.go"),
 					ion.String("func", "EnsureCollection"),
@@ -84,15 +95,19 @@ func (s *DocumentStore) EnsureCollection(ctx context.Context, name string) error
 			}
 		}
 		// Old single-vector schema — drop and recreate.
+		span.SetAttributes(attribute.String("action", "migrating"))
 		s.logger.Warn(ctx, "legacy collection detected: migrating",
 			ion.String("file", "document_store.go"),
 			ion.String("func", "EnsureCollection"),
 			ion.String("collection", name),
 		)
 		if err := s.client.DeleteCollection(ctx, name); err != nil {
+			span.RecordError(err)
+			span.SetStatus(ion.StatusError, err.Error())
 			return fmt.Errorf("drop legacy collection %s: %w", name, err)
 		}
 	}
+	span.SetAttributes(attribute.String("action", "created"))
 	s.logger.Info(ctx, "creating collection",
 		ion.String("file", "document_store.go"),
 		ion.String("func", "EnsureCollection"),
@@ -114,6 +129,15 @@ func (s *DocumentStore) Upsert(ctx context.Context, collection string, texts []s
 	if len(texts) != len(points) {
 		return fmt.Errorf("store: texts/points mismatch %d vs %d", len(texts), len(points))
 	}
+
+	tracer := s.logger.Tracer("store")
+	ctx, span := tracer.Start(ctx, "store.upsert")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("collection", collection),
+		attribute.Int("count", len(points)),
+	)
+
 	qpoints := make([]*qdrantgo.PointStruct, len(points))
 	for i, p := range points {
 		qpoints[i] = &qdrantgo.PointStruct{
@@ -130,6 +154,8 @@ func (s *DocumentStore) Upsert(ctx context.Context, collection string, texts []s
 		Points:         qpoints,
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
 		s.logger.Error(ctx, "upsert failed", err,
 			ion.String("file", "document_store.go"),
 			ion.String("func", "Upsert"),
@@ -151,6 +177,15 @@ func (s *DocumentStore) Upsert(ctx context.Context, collection string, texts []s
 // Each leg fetches candidateMult*topK candidates; RRF re-ranks and returns topK.
 // Time: O(k) where k = topK; dominated by Qdrant network round-trip + two-leg server search.
 func (s *DocumentStore) Search(ctx context.Context, collection, query string, topK uint64) ([]SearchResult, error) {
+	tracer := s.logger.Tracer("store")
+	ctx, span := tracer.Start(ctx, "store.search")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("collection", collection),
+		attribute.String("query", query),
+		attribute.Int64("top_k", int64(topK)),
+	)
+
 	candidateK := topK * candidateMult
 
 	resp, err := s.client.Query(ctx, &qdrantgo.QueryPoints{
@@ -172,14 +207,26 @@ func (s *DocumentStore) Search(ctx context.Context, collection, query string, to
 		WithPayload: qdrantgo.NewWithPayload(true),
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
 		return nil, err
 	}
-	return scoredToResults(resp), nil
+	results := scoredToResults(resp)
+	span.SetAttributes(attribute.Int("results", len(results)))
+	return results, nil
 }
 
 // GetByURL returns all stored chunks for a specific page URL via payload filter scroll.
 // Time: O(n) where n = chunks stored for pageURL; dominated by Qdrant scroll.
 func (s *DocumentStore) GetByURL(ctx context.Context, collection, pageURL string) ([]SearchResult, error) {
+	tracer := s.logger.Tracer("store")
+	ctx, span := tracer.Start(ctx, "store.get_by_url")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("collection", collection),
+		attribute.String("page_url", pageURL),
+	)
+
 	resp, err := s.client.Scroll(ctx, &qdrantgo.ScrollPoints{
 		CollectionName: collection,
 		Filter: &qdrantgo.Filter{
@@ -191,12 +238,15 @@ func (s *DocumentStore) GetByURL(ctx context.Context, collection, pageURL string
 		Limit:       qdrantgo.PtrOf(uint32(200)),
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
 		return nil, err
 	}
 	out := make([]SearchResult, len(resp))
 	for i, p := range resp {
 		out[i] = payloadToResult(p.Payload, 0)
 	}
+	span.SetAttributes(attribute.Int("chunks_returned", len(out)))
 	return out, nil
 }
 
