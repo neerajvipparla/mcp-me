@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -63,6 +64,15 @@ func (h *RegisterHandler) Register(c *gin.Context) {
 		Email:              req.Email,
 		PlatformAPIKeyHash: keyHash,
 	}); err != nil {
+		if strings.Contains(err.Error(), "23505") || strings.Contains(err.Error(), "duplicate key") {
+			logger.Warn(ctx, "registration conflict",
+				ion.String("file", "register.go"),
+				ion.String("func", "Register"),
+				ion.String("email", req.Email),
+			)
+			c.JSON(409, gin.H{"error": "email already registered — POST /v1/crawl with your existing api_key to get a new mcp_api_key"})
+			return
+		}
 		logger.Error(ctx, "db error", err,
 			ion.String("file", "register.go"),
 			ion.String("func", "Register"),
