@@ -88,7 +88,13 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	}
 	colSpan.End()
 
-	h.db.UpdateCrawlStatus(ctx, p.CrawlID, "crawling")
+	if err := h.db.UpdateCrawlStatus(ctx, p.CrawlID, "crawling"); err != nil {
+		h.logger.Error(ctx, "failed to update status: crawling", err,
+			ion.String("file", "pipeline.go"),
+			ion.String("func", "ProcessTask"),
+			ion.String("crawl_id", p.CrawlID),
+		)
+	}
 	h.logger.Info(ctx, "status: crawling",
 		ion.String("file", "pipeline.go"),
 		ion.String("func", "ProcessTask"),
@@ -125,7 +131,13 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 	pool := crawlertypes.NewCrawlPool(h.chain, 5)
 	results := pool.FetchAll(ctx, urls)
 
-	h.db.UpdateCrawlStatus(ctx, p.CrawlID, "chunking")
+	if err := h.db.UpdateCrawlStatus(ctx, p.CrawlID, "chunking"); err != nil {
+		h.logger.Error(ctx, "failed to update status: chunking", err,
+			ion.String("file", "pipeline.go"),
+			ion.String("func", "ProcessTask"),
+			ion.String("crawl_id", p.CrawlID),
+		)
+	}
 	h.logger.Info(ctx, "status: chunking",
 		ion.String("file", "pipeline.go"),
 		ion.String("func", "ProcessTask"),
@@ -189,7 +201,14 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 			})
 		}
 		// Record every scraped URL so sub-page cache hits work on future requests.
-		h.db.CreateCrawlPage(ctx, p.CrawlID, r.URL, pageTitle, len(chunks))
+		if err := h.db.CreateCrawlPage(ctx, p.CrawlID, r.URL, pageTitle, len(chunks)); err != nil {
+			h.logger.Error(ctx, "failed to record crawl page", err,
+				ion.String("file", "pipeline.go"),
+				ion.String("func", "ProcessTask"),
+				ion.String("crawl_id", p.CrawlID),
+				ion.String("url", r.URL),
+			)
+		}
 		totalPages++
 	}
 	fetchSpan.SetAttributes(
@@ -216,7 +235,13 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		ion.String("chunks", fmt.Sprintf("%d", len(allTexts))),
 	)
 
-	h.db.UpdateCrawlStatus(ctx, p.CrawlID, "embedding")
+	if err := h.db.UpdateCrawlStatus(ctx, p.CrawlID, "embedding"); err != nil {
+		h.logger.Error(ctx, "failed to update status: embedding", err,
+			ion.String("file", "pipeline.go"),
+			ion.String("func", "ProcessTask"),
+			ion.String("crawl_id", p.CrawlID),
+		)
+	}
 	h.logger.Info(ctx, "status: embedding",
 		ion.String("file", "pipeline.go"),
 		ion.String("func", "ProcessTask"),

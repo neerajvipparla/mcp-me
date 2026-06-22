@@ -74,7 +74,7 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 			ion.String("url", req.URL),
 			ion.String("crawl_id", existing.ID),
 		)
-		h.issueKey(c, existing.ID, "ready")
+		h.issueKey(c, existing.ID, "ready", false)
 		return
 	}
 
@@ -92,7 +92,7 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 			ion.String("url", req.URL),
 			ion.String("crawl_id", byPage.ID),
 		)
-		h.issueKey(c, byPage.ID, "ready")
+		h.issueKey(c, byPage.ID, "ready", false)
 		return
 	}
 
@@ -128,10 +128,28 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 		URL:        req.URL,
 		EmbedderID: embedderID,
 	})
-	h.queue.Enqueue(asynq.NewTask(worker.TaskCrawlPipeline, payload,
+	if _, err := h.queue.Enqueue(asynq.NewTask(worker.TaskCrawlPipeline, payload,
 		asynq.MaxRetry(3),
 		asynq.Queue("default"),
-	))
+	)); err != nil {
+		if dbErr := h.db.UpdateCrawlStatus(ctx, crawlID, "failed"); dbErr != nil {
+			logger.Error(ctx, "failed to mark crawl as failed", dbErr,
+				ion.String("file", "crawl.go"),
+				ion.String("func", "PostCrawl"),
+				ion.String("crawl_id", crawlID),
+			)
+		}
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
+		logger.Error(ctx, "enqueue failed", err,
+			ion.String("file", "crawl.go"),
+			ion.String("func", "PostCrawl"),
+			ion.String("crawl_id", crawlID),
+			ion.String("url", req.URL),
+		)
+		c.JSON(500, gin.H{"error": "failed to queue crawl job"})
+		return
+	}
 	logger.Info(ctx, "crawl queued",
 		ion.String("file", "crawl.go"),
 		ion.String("func", "PostCrawl"),
@@ -140,16 +158,33 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 		ion.String("collection", collection),
 	)
 
-	h.issueKey(c, crawlID, "queued")
+	h.issueKey(c, crawlID, "queued", true)
 }
 
 // issueKey creates a user_crawls row, bcrypt-hashes the mcp_api_key,
 // and writes the response. mcp_api_key plaintext is never stored.
-func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string) {
+// markFailedOnError: when true (fresh crawl), marks the crawl as "failed" if
+// key issuance fails so the job's successful run isn't permanently inaccessible.
+func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string, markFailedOnError bool) {
 	ctx := c.Request.Context()
+
+	markFailed := func() {
+		if !markFailedOnError {
+			return
+		}
+		if dbErr := h.db.UpdateCrawlStatus(ctx, crawlID, "failed"); dbErr != nil {
+			logger.Error(ctx, "failed to mark crawl as failed", dbErr,
+				ion.String("file", "crawl.go"),
+				ion.String("func", "issueKey"),
+				ion.String("crawl_id", crawlID),
+			)
+		}
+	}
+
 	mcpKey := generateToken()
 	keyHash, err := bcrypt.GenerateFromPassword([]byte(mcpKey), bcrypt.DefaultCost)
 	if err != nil {
+		markFailed()
 		logger.Error(ctx, "key generation failed", err,
 			ion.String("file", "crawl.go"),
 			ion.String("func", "issueKey"),
@@ -165,6 +200,7 @@ func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string) {
 		CrawlID:       crawlID,
 		MCPAPIKeyHash: string(keyHash),
 	}); err != nil {
+		markFailed()
 		logger.Error(ctx, "db error", err,
 			ion.String("file", "crawl.go"),
 			ion.String("func", "issueKey"),

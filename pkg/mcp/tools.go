@@ -135,10 +135,27 @@ func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string)
 		URL:        rootURL,
 		EmbedderID: embedderID,
 	})
-	t.queue.Enqueue(asynq.NewTask(worker.TaskCrawlPipeline, payload,
+	if _, err := t.queue.Enqueue(asynq.NewTask(worker.TaskCrawlPipeline, payload,
 		asynq.MaxRetry(3),
 		asynq.Queue("default"),
-	))
+	)); err != nil {
+		if dbErr := t.db.UpdateCrawlStatus(ctx, crawlID, "failed"); dbErr != nil {
+			t.logger.Error(ctx, "failed to mark crawl as failed", dbErr,
+				ion.String("file", "tools.go"),
+				ion.String("func", "CreateCrawl"),
+				ion.String("crawl_id", crawlID),
+			)
+		}
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
+		t.logger.Error(ctx, "enqueue failed", err,
+			ion.String("file", "tools.go"),
+			ion.String("func", "CreateCrawl"),
+			ion.String("crawl_id", crawlID),
+			ion.String("url", rootURL),
+		)
+		return nil, fmt.Errorf("failed to queue crawl job: %w", err)
+	}
 	t.logger.Info(ctx, "crawl queued",
 		ion.String("file", "tools.go"),
 		ion.String("func", "CreateCrawl"),
@@ -155,6 +172,9 @@ func (t *Tools) issueKey(ctx context.Context, currentCrawlID, newCrawlID, rootUR
 	uc, err := t.db.GetUserCrawlByCrawlID(ctx, currentCrawlID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve user: %w", err)
+	}
+	if uc == nil {
+		return nil, fmt.Errorf("user crawl not found for crawl_id: %s", currentCrawlID)
 	}
 
 	raw := make([]byte, 32)
