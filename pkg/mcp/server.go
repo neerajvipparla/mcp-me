@@ -116,6 +116,7 @@ func (s *Server) Handle(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+	userID := uc.UserID
 	var result any
 	var rpcErr *rpcError
 
@@ -146,7 +147,7 @@ func (s *Server) Handle(c *gin.Context) {
 			ion.String("tool", p.Name),
 			ion.String("crawl_id", crawlID),
 		)
-		result, rpcErr = s.callTool(ctx, crawlID, p.Name, p.Arguments)
+		result, rpcErr = s.callTool(ctx, crawlID, userID, p.Name, p.Arguments)
 
 	// ── Legacy direct methods (curl-friendly) ─────────────────────────────────
 	case "search_docs":
@@ -209,7 +210,7 @@ func (s *Server) Handle(c *gin.Context) {
 
 // callTool dispatches tools/call to the correct tool implementation
 // and wraps the result in MCP's content envelope.
-func (s *Server) callTool(ctx context.Context, crawlID, name string, args json.RawMessage) (any, *rpcError) {
+func (s *Server) callTool(ctx context.Context, crawlID, userID, name string, args json.RawMessage) (any, *rpcError) {
 	switch name {
 	case "search_docs":
 		var p struct {
@@ -263,7 +264,7 @@ func (s *Server) callTool(ctx context.Context, crawlID, name string, args json.R
 		return toolResult{Content: []toolContent{{Type: "text", Text: string(b)}}}, nil
 
 	case "list_crawls":
-		res, err := s.tools.ListCrawls(ctx, crawlID)
+		res, err := s.tools.ListCrawls(ctx, userID)
 		if err != nil {
 			return nil, &rpcError{Code: -32000, Message: err.Error()}
 		}

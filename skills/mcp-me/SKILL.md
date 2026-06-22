@@ -69,12 +69,24 @@ All collection credentials live in `.mcpme/collections.json` in the project root
 
 ### Session Start — Sync local state with server
 
-Before phase 1, if `.mcpme/collections.json` is absent or the session is fresh:
-1. Call `list_crawls` on any already-configured MCP endpoint
-2. Merge results into your in-memory view — server is the source of truth
-3. Collections with `status != "ready"` are not searchable; skip them in phase 1
+The server is the source of truth for **status, page_count, chunk_count, mcp_endpoint**.
+The local file is the source of truth for **description** — the server never stores it.
+Phase 1 matching only works if both are merged correctly.
 
-If no MCP endpoint is configured yet, go straight to the one-time setup below.
+**If an MCP endpoint is already configured** (from CLAUDE.md snippet or `.mcpme/collections.json`):
+
+1. Call `list_crawls` on any one configured endpoint — it returns all collections for the account.
+2. For each result, find the matching entry in `.mcpme/collections.json` by `crawl_id`:
+   - **Match found**: update `status`, `page_count`, `chunk_count`, `mcp_endpoint` from server. Keep the local `description` and `id` unchanged.
+   - **No local match** (collection exists on server but not in file): add it to `.mcpme/collections.json` with `status`, `url`, `mcp_endpoint` from server. Set `description` to `""` for now — flag it as needing a description (see below).
+   - **Local entry missing from server** (crawl deleted or failed): mark it `status: "failed"` locally; exclude from phase 1.
+3. Skip any entry with `status != "ready"` in phase 1 matching.
+4. For any entry with an empty `description`: infer one from the `url` (e.g. `"redis.io docs"`) as a placeholder, then improve it after the first successful `search_docs` call by summarising what you found. Write the improved description back to `.mcpme/collections.json`.
+5. Write the merged state back to `.mcpme/collections.json`.
+
+**If no MCP endpoint is configured yet**: go straight to the one-time setup below.
+
+**Key invariant:** `description` always comes from `.mcpme/collections.json`, never from the server. Never overwrite a non-empty local description with a server value.
 
 ### Phase 1 — Description Matching (always runs first)
 
@@ -269,9 +281,12 @@ User asks about library/API/framework
 ├─ Is an MCP endpoint configured? (CLAUDE.md snippet or .mcpme/collections.json)
 │   └─ NO → Guide user through one-time setup (see below)
 │
-├─ Session start: call list_crawls → merge with local collections.json
+├─ Session start: call list_crawls → merge into collections.json
+│   ├─ server entry + local match   → update status/counts, keep local description
+│   ├─ server entry, no local match → add entry, description = "" (infer from url)
+│   └─ local entry missing on server → mark failed, exclude from phase 1
 │
-├─ Phase 1: Description matching (ready collections only)
+├─ Phase 1: Description matching (ready collections with non-empty description only)
 │   ├─ 1 clear match → search_docs on that collection
 │   ├─ 0 matches → create_crawl(root_url) → poll get_status → write to collections.json
 │   └─ 2+ candidates → Phase 2: dispatch subagent probe

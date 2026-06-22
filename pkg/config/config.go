@@ -40,6 +40,16 @@ type ServerConfig struct {
 	Host string `yaml:"host"`
 }
 
+// ResolvedHost returns the public base URL for this server.
+// SERVER_HOST env var takes full precedence (production override).
+// Falls back to the yaml value, which defaults to http://localhost:8080.
+func (s ServerConfig) ResolvedHost() string {
+	if h := os.Getenv("SERVER_HOST"); h != "" {
+		return h
+	}
+	return s.Host
+}
+
 // QdrantConfig holds connection settings only — no API key (secret, lives in env).
 // Whether CloudConfig or SelfHostedConfig is selected is determined by the presence
 // of QDRANT_API_KEY at runtime (see pkg/qdrantcfg).

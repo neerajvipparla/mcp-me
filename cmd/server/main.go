@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -59,14 +60,26 @@ func main() {
 		ion.String("file", "main.go"),
 		ion.String("func", "main"),
 		ion.String("port", fmt.Sprintf("%d", cfg.Server.Port)),
+		ion.String("host", cfg.Server.ResolvedHost()),
 	)
+	if h := cfg.Server.ResolvedHost(); strings.Contains(h, "localhost") || strings.Contains(h, "127.0.0.1") {
+		logger.Warn(ctx, "host is localhost — mcp_endpoint and claude_md URLs will be wrong in production; set SERVER_HOST env var",
+			ion.String("file", "main.go"),
+			ion.String("func", "main"),
+			ion.String("host", h),
+		)
+	}
 
 	// ── Secrets (env vars) ───────────────────────────────────────────────────
 	qdrantAPIKey := os.Getenv("QDRANT_API_KEY")
 	dbPassword := os.Getenv("DATABASE_PASSWORD")
-	redisDSN := os.Getenv("REDIS_URL")
-	if redisDSN == "" {
-		redisDSN = "localhost:6379"
+	redisOpt, err := redisConnOpt()
+	if err != nil {
+		logger.Error(ctx, "redis config invalid", err,
+			ion.String("file", "main.go"),
+			ion.String("func", "main"),
+		)
+		log.Fatal("redis:", err)
 	}
 
 	// ── Qdrant client ────────────────────────────────────────────────────────
@@ -117,7 +130,7 @@ func main() {
 
 	// ── Asynq worker ─────────────────────────────────────────────────────────
 	asynqSrv := asynq.NewServer(
-		asynq.RedisClientOpt{Addr: redisDSN},
+		redisOpt,
 		asynq.Config{Concurrency: cfg.Worker.Concurrency},
 	)
 	mux := asynq.NewServeMux()
@@ -131,10 +144,9 @@ func main() {
 		ion.String("file", "main.go"),
 		ion.String("func", "main"),
 		ion.String("concurrency", fmt.Sprintf("%d", cfg.Worker.Concurrency)),
-		ion.String("redis", redisDSN),
 	)
 
-	queue := asynq.NewClient(asynq.RedisClientOpt{Addr: redisDSN})
+	queue := asynq.NewClient(redisOpt)
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	r := gin.Default()
@@ -150,13 +162,13 @@ func main() {
 		// Protected — platform key required (pg narrowed to UserDB for auth,
 		// CrawlDB for the handler)
 		authed := v1.Group("/", api.PlatformKeyAuth(pg))
-		crawlHandler := api.NewCrawlHandler(pg, vs, queue, cfg.Server.Host)
+		crawlHandler := api.NewCrawlHandler(pg, vs, queue, cfg.Server.ResolvedHost())
 		authed.POST("/crawl", crawlHandler.PostCrawl)
 		authed.GET("/crawl/:id", crawlHandler.GetStatus)
 		authed.GET("/crawls", crawlHandler.ListCrawls)
 
 		// MCP endpoint — authenticates via mcp_api_key (bcrypt, per session)
-		tools := mcp.NewTools(vs, pg, chain, queue, cfg.Server.Host)
+		tools := mcp.NewTools(vs, pg, chain, queue, cfg.Server.ResolvedHost())
 		v1.POST("/mcp/:crawl_id", mcp.NewServer(tools, pg).Handle)
 	}
 
@@ -200,4 +212,15 @@ func main() {
 		ion.String("func", "main"),
 	)
 	logging.NewAsyncLogger().Shutdown()
+}
+
+// redisConnOpt builds an Asynq Redis connection option from REDIS_URL.
+// Supports full URIs (redis://user:pass@host:port, rediss:// for TLS)
+// as well as bare host:port for local dev.
+func redisConnOpt() (asynq.RedisConnOpt, error) {
+	url := os.Getenv("REDIS_URL")
+	if url == "" {
+		return asynq.RedisClientOpt{Addr: "localhost:6379"}, nil
+	}
+	return asynq.ParseRedisURI(url)
 }

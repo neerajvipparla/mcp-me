@@ -115,13 +115,29 @@ Span coverage per tier — see `docs/tracing-plan.md` for the full inventory:
 - **Tier 2**: `discovery`, `mcp.search_docs`, `mcp.get_page`, `mcp.add_page`, `mcp.create_crawl`, `chunker.split`
 - **Tier 3**: `api.post_crawl`, `api.get_status`, `pool.fetch_all`
 
+## Environment Variables
+
+All secrets and deployment-specific overrides live in `.env`. Non-secret settings live in `config.yaml`.
+
+| Variable | Required in prod | Purpose |
+|---|---|---|
+| `QDRANT_API_KEY` | yes (cloud) | Enables TLS + auth for Qdrant Cloud; omit for self-hosted |
+| `DATABASE_PASSWORD` | yes | Postgres password (used when `DATABASE_URL` is not set) |
+| `DATABASE_URL` | optional | Full Postgres DSN — overrides `config.yaml` host/port/db/user |
+| `QDRANT_HOST` | optional | Overrides `config.yaml` qdrant.host (e.g. Qdrant Cloud hostname) |
+| `SERVER_HOST` | **yes in prod** | Public base URL (e.g. `https://api.example.com`) — baked into every `mcp_endpoint` and `claude_md` field. Defaults to `config.yaml` server.host (`http://localhost:8080`). Server logs a startup warning if the resolved value contains `localhost`. |
+| `REDIS_URL` | yes in prod | Full Redis URI — `redis://user:pass@host:port` or `rediss://` for TLS. Parsed via `asynq.ParseRedisURI`. Defaults to `localhost:6379` bare address if unset. |
+| `FIRECRAWL_URL` | optional | Firecrawl API key — enables the paid last-resort crawler strategy |
+
 ## Known Pitfalls
 
+- **`SERVER_HOST` not set in production** — all `mcp_endpoint` and `claude_md` URLs will point to `localhost:8080`. Server emits a `Warn` log at startup if the host looks like localhost. Fix: set `SERVER_HOST=https://your-domain.com` in `.env`.
 - **Crawl scope explosion** — `Filter` in `pkg/discovery/` enforces same-domain + path prefix. Don't weaken it.
 - **chromedp memory** — each headless context ~150MB; max 2 concurrent headless crawls; `taskCancel()` is called immediately after each page fetch
 - **URL hash stability** — normalize before hashing: lowercase domain, strip `www`, remove trailing slash, drop query params. Done in `store.HashURL()`.
 - **MCP API key** — bcrypt-hashed in Postgres; plaintext returned exactly once; never log it. Platform API key is SHA-256 (deterministic, lookupable).
 - **`ion.Tracer()` returns noop when tracing disabled** — safe to call always; logs a one-time warning
+- **`list_crawls` user lookup** — `userID` is resolved once during MCP auth (`GetUserCrawlByCrawlID`) and threaded into `callTool` → `ListCrawls`. Do not re-fetch it inside `ListCrawls`; the parameter is `userID string`, not `crawlID string`.
 
 ## Coding Rules (from prior feedback)
 

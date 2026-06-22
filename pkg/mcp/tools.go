@@ -213,19 +213,15 @@ func (t *Tools) issueKey(ctx context.Context, currentCrawlID, newCrawlID, rootUR
 	}, nil
 }
 
-// ListCrawls returns all crawls belonging to the user identified by the current session's crawlID.
-func (t *Tools) ListCrawls(ctx context.Context, crawlID string) ([]ListCrawlEntry, error) {
+// ListCrawls returns all crawls belonging to userID.
+// userID is resolved once during MCP auth in server.go and threaded in — no extra DB round-trip.
+func (t *Tools) ListCrawls(ctx context.Context, userID string) ([]ListCrawlEntry, error) {
 	tracer := t.logger.Tracer("mcp")
 	ctx, span := tracer.Start(ctx, "mcp.list_crawls")
 	defer span.End()
-	span.SetAttributes(attribute.String("crawl_id", crawlID))
+	span.SetAttributes(attribute.String("user_id", userID))
 
-	uc, err := t.db.GetUserCrawlByCrawlID(ctx, crawlID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve user: %w", err)
-	}
-
-	crawls, err := t.db.ListUserCrawls(ctx, uc.UserID)
+	crawls, err := t.db.ListUserCrawls(ctx, userID)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(ion.StatusError, err.Error())
@@ -252,7 +248,7 @@ func (t *Tools) ListCrawls(ctx context.Context, crawlID string) ([]ListCrawlEntr
 	t.logger.Info(ctx, "list crawls",
 		ion.String("file", "tools.go"),
 		ion.String("func", "ListCrawls"),
-		ion.String("crawl_id", crawlID),
+		ion.String("user_id", userID),
 		ion.String("count", fmt.Sprintf("%d", len(entries))),
 	)
 	return entries, nil

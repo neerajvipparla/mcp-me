@@ -1,6 +1,6 @@
 server:
   port: 8080
-  host: http://localhost:8080
+  host: http://localhost:8080   # override in production with SERVER_HOST env var
 
 # Qdrant connection settings (non-secret).
 # API key lives in .env → QDRANT_API_KEY.
