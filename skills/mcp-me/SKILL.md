@@ -67,9 +67,18 @@ All collection credentials live in `.mcpme/collections.json` in the project root
 
 **This is the core decision loop.** Run this every time you need to query docs.
 
+### Session Start — Sync local state with server
+
+Before phase 1, if `.mcpme/collections.json` is absent or the session is fresh:
+1. Call `list_crawls` on any already-configured MCP endpoint
+2. Merge results into your in-memory view — server is the source of truth
+3. Collections with `status != "ready"` are not searchable; skip them in phase 1
+
+If no MCP endpoint is configured yet, go straight to the one-time setup below.
+
 ### Phase 1 — Description Matching (always runs first)
 
-Read `.mcpme/collections.json`. For each collection, check: does the `description` clearly cover the user's query topic?
+Read `.mcpme/collections.json` (merged with `list_crawls` results if available). For each **ready** collection, check: does the `description` clearly cover the user's query topic?
 
 **Rules:**
 - If **exactly one** collection's description matches → use it directly, skip Phase 2
@@ -128,6 +137,36 @@ If all scores are below 0.4, set winner to "none".
 
 ## Tools Reference
 
+### `list_crawls` — Discover available collections
+
+**Use for:** session start, to see what's already indexed before searching or creating anything.
+
+```json
+{}
+```
+
+Returns all collections for the account: `crawl_id`, `url`, `status`, `page_count`, `chunk_count`, `mcp_endpoint`.
+
+**When to call:** at the start of any session where `.mcpme/collections.json` is absent or may be incomplete. Cross-reference results with the local file — the server is the source of truth.
+
+---
+
+### `get_status` — Poll crawl readiness
+
+**Use for:** checking whether a crawl triggered by `create_crawl` has finished processing.
+
+```json
+{ "crawl_id": "<uuid>" }
+```
+
+Omit `crawl_id` to check the current session's crawl. Returns `status`, `page_count`, `chunk_count`, `mcp_endpoint`.
+
+**Status progression:** `queued → crawling → chunking → embedding → ready → failed`
+
+**After `create_crawl` returns `queued`:** poll `get_status` every 15–30 seconds until `status == "ready"`, then proceed with `search_docs`. Do not block the user — offer to check back rather than spinning in a loop.
+
+---
+
 ### `search_docs` — Semantic search
 
 **Use for:** any question about library behavior, APIs, configuration, error messages.
@@ -140,8 +179,8 @@ If all scores are below 0.4, set winner to "none".
 - Specific method/param → `top_k: 3`
 - If results have score < 0.5 → rephrase once, retry
 - If still empty → try `add_page` for a known URL, then search again
-- If server returns "crawl not ready" error → collection is still processing; tell user and wait
-- If server returns "crawl not found" error → collection failed or was deleted; offer `create_crawl`
+- If server returns "crawl not ready" → call `get_status` to check progress; tell user and wait
+- If server returns "crawl not found" → collection failed or was deleted; offer `create_crawl`
 
 ---
 
@@ -216,8 +255,9 @@ Authorization = "Bearer <bearer_token>"
 }
 ```
 
-6. If `status` is `queued`: tell user crawling is in progress, they can poll with `GET /v1/crawl/<crawl_id>`. States progress: `queued → crawling → chunking → embedding → ready`.
-7. If `status` is `failed`: tell user the crawl failed and offer to retry by calling `create_crawl` again with the same URL.
+6. If `status` is `queued`: call `get_status` every 15–30 seconds until `ready`. Tell the user crawling is in progress and offer to check back — don't block. States: `queued → crawling → chunking → embedding → ready`.
+7. If `status` is `ready`: the response from `POST /v1/crawl` includes a `claude_md` field — paste it into the project's `CLAUDE.md` so future sessions auto-configure without needing `.mcpme/collections.json`.
+8. If `status` is `failed`: tell user the crawl failed and offer to retry by calling `create_crawl` again with the same URL.
 
 ---
 
@@ -226,17 +266,19 @@ Authorization = "Bearer <bearer_token>"
 ```
 User asks about library/API/framework
 │
-├─ Does .mcpme/collections.json exist?
+├─ Is an MCP endpoint configured? (CLAUDE.md snippet or .mcpme/collections.json)
 │   └─ NO → Guide user through one-time setup (see below)
 │
-├─ Phase 1: Description matching
+├─ Session start: call list_crawls → merge with local collections.json
+│
+├─ Phase 1: Description matching (ready collections only)
 │   ├─ 1 clear match → search_docs on that collection
-│   ├─ 0 matches → create_crawl(root_url) → write to collections.json
+│   ├─ 0 matches → create_crawl(root_url) → poll get_status → write to collections.json
 │   └─ 2+ candidates → Phase 2: dispatch subagent probe
 │
 ├─ Phase 2: Subagent probe (parallel search_docs top_k=1 on each candidate)
 │   ├─ winner found (score ≥ 0.4) → search_docs(full query) on winner
-│   └─ no winner (all < 0.4) → create_crawl → write to collections.json
+│   └─ no winner (all < 0.4) → create_crawl → poll get_status → write to collections.json
 │
 └─ Compose answer
     ├─ Cite page_url for every claim
@@ -279,11 +321,15 @@ curl -s -X POST http://localhost:8080/v1/crawl \
   -H "X-API-Key: <api_key>" \
   -d '{"url": "https://docs.example.com"}' | jq .
 # → save crawl_id and mcp_api_key (shown once)
+# → if status == "ready": response includes claude_md — paste it into CLAUDE.md
 
-# 3. Poll until ready
+# 3. Poll until ready (if status was "queued")
 curl -s http://localhost:8080/v1/crawl/<crawl_id> \
   -H "X-API-Key: <api_key>" | jq .status
+# → once "ready", re-POST the same URL to get a fresh mcp_api_key + claude_md snippet
 ```
+
+**Shortcut — if the crawl response included `claude_md`:** paste the snippet directly into your project's `CLAUDE.md`. Future sessions will auto-configure from it — no `.mcpme/collections.json` needed for single-collection projects.
 
 ---
 
