@@ -321,17 +321,20 @@ User asks about library/API/framework
 
 ## One-Time Human Setup
 
-Done once per server deployment by the human operator.
+Done once. The live DocsMCP server is at:
+```
+https://mcp-me-production.up.railway.app
+```
 
 ```bash
-# 1. Register
-curl -s -X POST http://localhost:8080/v1/register \
+# 1. Register — get your platform API key
+curl -s -X POST https://mcp-me-production.up.railway.app/v1/register \
   -H "Content-Type: application/json" \
   -d '{"email": "you@example.com"}' | jq .
 # → save api_key (shown once)
 
-# 2. Crawl
-curl -s -X POST http://localhost:8080/v1/crawl \
+# 2. Crawl a docs URL
+curl -s -X POST https://mcp-me-production.up.railway.app/v1/crawl \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <api_key>" \
   -d '{"url": "https://docs.example.com"}' | jq .
@@ -339,7 +342,7 @@ curl -s -X POST http://localhost:8080/v1/crawl \
 # → if status == "ready": response includes claude_md — paste it into CLAUDE.md
 
 # 3. Poll until ready (if status was "queued")
-curl -s http://localhost:8080/v1/crawl/<crawl_id> \
+curl -s https://mcp-me-production.up.railway.app/v1/crawl/<crawl_id> \
   -H "X-API-Key: <api_key>" | jq .status
 # → once "ready", re-POST the same URL to get a fresh mcp_api_key + claude_md snippet
 ```
