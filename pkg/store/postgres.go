@@ -200,6 +200,33 @@ func (s *PostgresStore) FindCrawlByPageURL(ctx context.Context, url string) (*Cr
 	return &r, nil
 }
 
+func (s *PostgresStore) ListUserCrawls(ctx context.Context, userID string) ([]CrawlRecord, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, url_raw, url_normalized, url_hash, status, embedder_id,
+		        page_count, chunk_count, qdrant_collection, last_modified, created_at, ready_at
+		 FROM crawls
+		 WHERE id IN (SELECT DISTINCT crawl_id FROM user_crawls WHERE user_id = $1)
+		 ORDER BY created_at DESC
+		 LIMIT 50`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CrawlRecord
+	for rows.Next() {
+		var r CrawlRecord
+		if err := rows.Scan(&r.ID, &r.URLRaw, &r.URLNormalized, &r.URLHash, &r.Status,
+			&r.EmbedderID, &r.PageCount, &r.ChunkCount, &r.QdrantCollection,
+			&r.LastModified, &r.CreatedAt, &r.ReadyAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) GetUserCrawlByCrawlID(ctx context.Context, crawlID string) (*UserCrawlRecord, error) {
 	row := s.pool.QueryRow(ctx,
 		`SELECT id, user_id, crawl_id, mcp_api_key_hash

@@ -262,6 +262,14 @@ func (s *Server) callTool(ctx context.Context, crawlID, name string, args json.R
 		b, _ := json.MarshalIndent(res, "", "  ")
 		return toolResult{Content: []toolContent{{Type: "text", Text: string(b)}}}, nil
 
+	case "list_crawls":
+		res, err := s.tools.ListCrawls(ctx, crawlID)
+		if err != nil {
+			return nil, &rpcError{Code: -32000, Message: err.Error()}
+		}
+		b, _ := json.MarshalIndent(res, "", "  ")
+		return toolResult{Content: []toolContent{{Type: "text", Text: string(b)}}}, nil
+
 	default:
 		return nil, &rpcError{Code: -32601, Message: "tool not found: " + name}
 	}
@@ -313,6 +321,14 @@ func toolDefinitions() []gin.H {
 					"url": gin.H{"type": "string", "description": "Root URL of the documentation to crawl"},
 				},
 				"required": []string{"url"},
+			},
+		},
+		{
+			"name":        "list_crawls",
+			"description": "List all documentation collections indexed for your account. Call this at session start to discover available collections before using search_docs or get_page. Returns crawl_id, url, status, page_count, chunk_count, and mcp_endpoint for each collection.",
+			"inputSchema": gin.H{
+				"type":       "object",
+				"properties": gin.H{},
 			},
 		},
 	}

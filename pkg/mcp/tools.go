@@ -43,6 +43,16 @@ type CreateCrawlResult struct {
 	Status      string `json:"status"`
 }
 
+type ListCrawlEntry struct {
+	CrawlID     string `json:"crawl_id"`
+	URL         string `json:"url"`
+	Status      string `json:"status"`
+	PageCount   int    `json:"page_count"`
+	ChunkCount  int    `json:"chunk_count"`
+	CrawledAt   string `json:"crawled_at"`
+	MCPEndpoint string `json:"mcp_endpoint"`
+}
+
 type Tools struct {
 	vs     store.Store
 	db     store.CrawlDB
@@ -201,6 +211,51 @@ func (t *Tools) issueKey(ctx context.Context, currentCrawlID, newCrawlID, rootUR
 		MCPAPIKey:   mcpKey,
 		Status:      status,
 	}, nil
+}
+
+// ListCrawls returns all crawls belonging to the user identified by the current session's crawlID.
+func (t *Tools) ListCrawls(ctx context.Context, crawlID string) ([]ListCrawlEntry, error) {
+	tracer := t.logger.Tracer("mcp")
+	ctx, span := tracer.Start(ctx, "mcp.list_crawls")
+	defer span.End()
+	span.SetAttributes(attribute.String("crawl_id", crawlID))
+
+	uc, err := t.db.GetUserCrawlByCrawlID(ctx, crawlID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve user: %w", err)
+	}
+
+	crawls, err := t.db.ListUserCrawls(ctx, uc.UserID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, err.Error())
+		return nil, fmt.Errorf("list crawls: %w", err)
+	}
+
+	entries := make([]ListCrawlEntry, len(crawls))
+	for i, cr := range crawls {
+		crawledAt := ""
+		if cr.ReadyAt != nil {
+			crawledAt = cr.ReadyAt.UTC().Format("2006-01-02")
+		}
+		entries[i] = ListCrawlEntry{
+			CrawlID:     cr.ID,
+			URL:         cr.URLRaw,
+			Status:      cr.Status,
+			PageCount:   cr.PageCount,
+			ChunkCount:  cr.ChunkCount,
+			CrawledAt:   crawledAt,
+			MCPEndpoint: fmt.Sprintf("%s/v1/mcp/%s", t.host, cr.ID),
+		}
+	}
+	span.SetAttributes(attribute.Int("count", len(entries)))
+	t.logger.Info(ctx, "list crawls",
+		ion.String("file", "tools.go"),
+		ion.String("func", "ListCrawls"),
+		ion.String("crawl_id", crawlID),
+		ion.String("count", fmt.Sprintf("%d", len(entries))),
+	)
+	return entries, nil
 }
 
 // minSearchScore is the minimum RRF fusion score required to include a result.

@@ -42,6 +42,8 @@ type CrawlDB interface {
 	CreateUserCrawl(ctx context.Context, r *UserCrawlRecord) error
 	GetUserCrawlByCrawlID(ctx context.Context, crawlID string) (*UserCrawlRecord, error)
 	CreateCrawlPage(ctx context.Context, crawlID, url, title string, chunkCount int) error
+	// ListUserCrawls returns all crawls belonging to userID, newest first.
+	ListUserCrawls(ctx context.Context, userID string) ([]CrawlRecord, error)
 }
 
 // DB composes both interfaces. PostgresStore implements this.

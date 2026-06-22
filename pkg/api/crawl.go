@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -74,7 +75,7 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 			ion.String("url", req.URL),
 			ion.String("crawl_id", existing.ID),
 		)
-		h.issueKey(c, existing.ID, "ready", false)
+		h.issueKey(c, existing, "ready", false)
 		return
 	}
 
@@ -92,7 +93,7 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 			ion.String("url", req.URL),
 			ion.String("crawl_id", byPage.ID),
 		)
-		h.issueKey(c, byPage.ID, "ready", false)
+		h.issueKey(c, byPage, "ready", false)
 		return
 	}
 
@@ -158,25 +159,25 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 		ion.String("collection", collection),
 	)
 
-	h.issueKey(c, crawlID, "queued", true)
+	h.issueKey(c, &store.CrawlRecord{ID: crawlID, URLRaw: req.URL}, "queued", true)
 }
 
 // issueKey creates a user_crawls row, bcrypt-hashes the mcp_api_key,
-// and writes the response. mcp_api_key plaintext is never stored.
+// and writes the response. mcp_api_key plaintext is never stored or logged.
 // markFailedOnError: when true (fresh crawl), marks the crawl as "failed" if
 // key issuance fails so the job's successful run isn't permanently inaccessible.
-func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string, markFailedOnError bool) {
+func (h *CrawlHandler) issueKey(c *gin.Context, cr *store.CrawlRecord, status string, markFailedOnError bool) {
 	ctx := c.Request.Context()
 
 	markFailed := func() {
 		if !markFailedOnError {
 			return
 		}
-		if dbErr := h.db.UpdateCrawlStatus(ctx, crawlID, "failed"); dbErr != nil {
+		if dbErr := h.db.UpdateCrawlStatus(ctx, cr.ID, "failed"); dbErr != nil {
 			logger.Error(ctx, "failed to mark crawl as failed", dbErr,
 				ion.String("file", "crawl.go"),
 				ion.String("func", "issueKey"),
-				ion.String("crawl_id", crawlID),
+				ion.String("crawl_id", cr.ID),
 			)
 		}
 	}
@@ -189,7 +190,7 @@ func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string, markFail
 			ion.String("file", "crawl.go"),
 			ion.String("func", "issueKey"),
 			ion.String("op", "bcrypt"),
-			ion.String("crawl_id", crawlID),
+			ion.String("crawl_id", cr.ID),
 		)
 		c.JSON(500, gin.H{"error": "key hash failed"})
 		return
@@ -197,7 +198,7 @@ func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string, markFail
 	if err := h.db.CreateUserCrawl(ctx, &store.UserCrawlRecord{
 		ID:            uuid.NewString(),
 		UserID:        c.GetString("user_id"),
-		CrawlID:       crawlID,
+		CrawlID:       cr.ID,
 		MCPAPIKeyHash: string(keyHash),
 	}); err != nil {
 		markFailed()
@@ -205,22 +206,78 @@ func (h *CrawlHandler) issueKey(c *gin.Context, crawlID, status string, markFail
 			ion.String("file", "crawl.go"),
 			ion.String("func", "issueKey"),
 			ion.String("op", "store mcp key"),
-			ion.String("crawl_id", crawlID),
+			ion.String("crawl_id", cr.ID),
 		)
 		c.JSON(500, gin.H{"error": "failed to store mcp key"})
 		return
+	}
+
+	endpoint := fmt.Sprintf("%s/v1/mcp/%s", h.host, cr.ID)
+	resp := gin.H{
+		"crawl_id":     cr.ID,
+		"mcp_endpoint": endpoint,
+		"mcp_api_key":  mcpKey, // shown once, never logged
+		"status":       status,
+	}
+	if status == "ready" && cr.PageCount > 0 {
+		resp["claude_md"] = claudeMDSnippet(cr, endpoint, mcpKey)
 	}
 
 	code := 202
 	if status == "ready" {
 		code = 200
 	}
-	c.JSON(code, gin.H{
-		"crawl_id":     crawlID,
-		"mcp_endpoint": fmt.Sprintf("%s/v1/mcp/%s", h.host, crawlID),
-		"mcp_api_key":  mcpKey, // shown once, never logged
-		"status":       status,
-	})
+	c.JSON(code, resp)
+}
+
+// claudeMDSnippet returns a ready-to-paste CLAUDE.md block for this crawl.
+func claudeMDSnippet(cr *store.CrawlRecord, endpoint, mcpKey string) string {
+	host := cr.URLRaw
+	if u, err := url.Parse(cr.URLRaw); err == nil {
+		host = u.Host
+	}
+	crawledAt := ""
+	if cr.ReadyAt != nil {
+		crawledAt = " · " + cr.ReadyAt.UTC().Format("2006-01-02")
+	}
+	return fmt.Sprintf(
+		"## DocsMCP — %s\nEndpoint: %s\nKey: %s\nSource: %s (%d pages · %d chunks%s)\nRule: Always call search_docs before answering questions about this library. Use list_crawls to see all indexed collections.",
+		host, endpoint, mcpKey, cr.URLRaw, cr.PageCount, cr.ChunkCount, crawledAt,
+	)
+}
+
+func (h *CrawlHandler) ListCrawls(c *gin.Context) {
+	ctx := c.Request.Context()
+	userID := c.GetString("user_id")
+
+	crawls, err := h.db.ListUserCrawls(ctx, userID)
+	if err != nil {
+		logger.Error(ctx, "db error", err,
+			ion.String("file", "crawl.go"),
+			ion.String("func", "ListCrawls"),
+			ion.String("user_id", userID),
+		)
+		c.JSON(500, gin.H{"error": "db error"})
+		return
+	}
+
+	result := make([]gin.H, len(crawls))
+	for i, cr := range crawls {
+		crawledAt := ""
+		if cr.ReadyAt != nil {
+			crawledAt = cr.ReadyAt.UTC().Format("2006-01-02")
+		}
+		result[i] = gin.H{
+			"crawl_id":     cr.ID,
+			"url":          cr.URLRaw,
+			"status":       cr.Status,
+			"page_count":   cr.PageCount,
+			"chunk_count":  cr.ChunkCount,
+			"crawled_at":   crawledAt,
+			"mcp_endpoint": fmt.Sprintf("%s/v1/mcp/%s", h.host, cr.ID),
+		}
+	}
+	c.JSON(200, result)
 }
 
 func (h *CrawlHandler) GetStatus(c *gin.Context) {
@@ -252,10 +309,11 @@ func (h *CrawlHandler) GetStatus(c *gin.Context) {
 		ion.String("status", cr.Status),
 	)
 	c.JSON(200, gin.H{
-		"crawl_id":    cr.ID,
-		"status":      cr.Status,
-		"page_count":  cr.PageCount,
-		"chunk_count": cr.ChunkCount,
+		"crawl_id":     cr.ID,
+		"status":       cr.Status,
+		"page_count":   cr.PageCount,
+		"chunk_count":  cr.ChunkCount,
+		"mcp_endpoint": fmt.Sprintf("%s/v1/mcp/%s", h.host, cr.ID),
 	})
 }
 

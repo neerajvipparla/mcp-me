@@ -153,6 +153,7 @@ func main() {
 		crawlHandler := api.NewCrawlHandler(pg, vs, queue, cfg.Server.Host)
 		authed.POST("/crawl", crawlHandler.PostCrawl)
 		authed.GET("/crawl/:id", crawlHandler.GetStatus)
+		authed.GET("/crawls", crawlHandler.ListCrawls)
 
 		// MCP endpoint — authenticates via mcp_api_key (bcrypt, per session)
 		tools := mcp.NewTools(vs, pg, chain, queue, cfg.Server.Host)
