@@ -34,7 +34,7 @@ pkg/
     types/                  # Handler interface, CrawlPool, PageResult
     helper/                 # HTML → Markdown conversion
   discovery/discovery.go    # sitemap.xml + BFS link extraction
-  mcp/                      # server.go (JSON-RPC), tools.go (search_docs, get_page, add_page, create_crawl)
+  mcp/                      # server.go (JSON-RPC), tools.go (search_docs, get_page, add_page, create_crawl, list_crawls, get_status)
   qdrantcfg/                # Qdrant client factory (cloud vs self-hosted)
   store/                    # document_store.go (Qdrant), postgres_store.go
   worker/pipeline.go        # Asynq task handler — orchestrates the full crawl pipeline
@@ -51,9 +51,11 @@ docs/
 ## Architecture
 
 ### Request Flow
-1. `POST /v1/crawl` → validate URL → check Postgres cache → enqueue Asynq job → return `{crawl_id, mcp_api_key, mcp_endpoint}`
+1. `POST /v1/crawl` → validate URL → check Postgres cache → enqueue Asynq job → return `{crawl_id, mcp_api_key, mcp_endpoint[, claude_md]}`
 2. Worker: discover URLs → fetch pool (5 concurrent) → chunk → embed via Qdrant FastEmbed → upsert → update Postgres status
-3. `POST /v1/mcp/:crawl_id` → auth Bearer token (bcrypt) → JSON-RPC dispatch → `search_docs` / `get_page` / `add_page` / `create_crawl`
+3. `GET /v1/crawl/:id` → poll status → returns `{status, page_count, chunk_count, mcp_endpoint}`
+4. `GET /v1/crawls` → list all crawls for user → returns array with `mcp_endpoint` per entry
+5. `POST /v1/mcp/:crawl_id` → auth Bearer token (bcrypt) → JSON-RPC dispatch → `search_docs` / `get_page` / `add_page` / `create_crawl` / `list_crawls` / `get_status`
 
 ### Crawler — Fallback Chain (in order)
 1. **Plain HTTP + goquery** — static sites (Hugo, Jekyll, MkDocs); fast, no browser overhead
@@ -85,8 +87,10 @@ Discovery checks `sitemap.xml` first; falls back to BFS link extraction. Same-do
 ### MCP Server (JSON-RPC 2.0)
 - Route: `POST /v1/mcp/:crawl_id`
 - Auth: `Authorization: Bearer <mcp_api_key>` verified with bcrypt on every request
-- Tools: `search_docs(query, top_k=5)`, `get_page(url)`, `add_page(url)`, `create_crawl(url)`
+- Tools: `search_docs(query, top_k=5)`, `get_page(url)`, `add_page(url)`, `create_crawl(url)`, `list_crawls()`, `get_status(crawl_id?)`
 - Also handles MCP protocol: `initialize`, `notifications/initialized`, `tools/list`, `tools/call`
+- `list_crawls` — returns all indexed collections for the account; call at session start to discover available docs
+- `get_status` — polls any crawl_id for status; use after `create_crawl` returns `queued` to wait for `ready`
 
 ### Postgres Schema
 ```sql

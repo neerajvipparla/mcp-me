@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: DocsMCP API
   description: Crawls documentation URLs, embeds them into Qdrant, and exposes MCP endpoints for AI assistants.
-  version: 1.0.0
+  version: 1.1.0
 
 servers:
   - url: http://localhost:8080
@@ -71,10 +71,12 @@ paths:
       summary: Submit a crawl job
       description: |
         Enqueues a crawl job for the given URL.
-        - Cache hit (URL already crawled): returns immediately with `status: ready` and a fresh `mcp_api_key`.
-        - Cache miss: creates a new crawl job, returns `status: queued`.
+        - **Cache hit** (URL already crawled): returns `200` with `status: ready`, a fresh `mcp_api_key`,
+          and a `claude_md` snippet ready to paste into your project's CLAUDE.md.
+        - **Cache miss**: creates a new crawl job, returns `202` with `status: queued`.
 
         The `mcp_api_key` is shown **once** — save it to authenticate MCP calls.
+        Poll `GET /v1/crawl/{id}` until `status` is `ready`, then use the `mcp_endpoint`.
       operationId: postCrawl
       security:
         - PlatformKeyHeader: []
@@ -93,13 +95,13 @@ paths:
                   example: https://docs.pydantic.dev/latest/
       responses:
         "200":
-          description: Cache hit — crawl already ready
+          description: Cache hit — crawl already ready, includes `claude_md` snippet
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CrawlResponse"
         "202":
-          description: Accepted — crawl job enqueued
+          description: Accepted — crawl job enqueued, poll GET /v1/crawl/{id} for status
           content:
             application/json:
               schema:
@@ -115,7 +117,7 @@ paths:
     get:
       tags: [crawl]
       summary: Get crawl status
-      description: Poll until `status` is `ready` or `failed`.
+      description: Poll until `status` is `ready` or `failed`. Returns `mcp_endpoint` for convenience.
       operationId: getCrawlStatus
       security:
         - PlatformKeyHeader: []
@@ -134,11 +136,37 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CrawlStatus"
+                $ref: "#/components/schemas/CrawlStatusResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /v1/crawls:
+    get:
+      tags: [crawl]
+      summary: List all crawls for the authenticated user
+      description: |
+        Returns up to 50 crawls belonging to the authenticated user, newest first.
+        Useful for discovering which documentation collections are available
+        before configuring an MCP session.
+      operationId: listCrawls
+      security:
+        - PlatformKeyHeader: []
+        - PlatformKeyBearer: []
+      responses:
+        "200":
+          description: Array of crawl records (may be empty)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CrawlListEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/mcp/{crawl_id}:
     post:
@@ -147,10 +175,21 @@ paths:
       description: |
         JSON-RPC 2.0 endpoint. Authenticate with the `mcp_api_key` returned by `POST /v1/crawl`.
 
-        **Methods:**
-        - `search_docs` — semantic search over the crawled docs
-        - `get_page` — retrieve all chunks for a specific page URL
-        - `add_page` — fetch, chunk, embed, and add a new page to the collection
+        Supports two calling styles:
+        - **MCP protocol** (`tools/call`): wraps results in `{content:[{type:"text",text:"..."}]}` — used by Claude Code and Cursor.
+        - **Legacy direct methods**: call the method name directly for simpler curl testing.
+
+        **Available tools:**
+        | Tool | Description |
+        |------|-------------|
+        | `search_docs` | Hybrid semantic search (dense + sparse RRF) over crawled docs |
+        | `get_page` | Retrieve all chunks for a specific page URL |
+        | `add_page` | Fetch, chunk, embed, and add a new page to the collection |
+        | `create_crawl` | Start a new collection for a different URL; returns new `mcp_endpoint` + `mcp_api_key` |
+        | `list_crawls` | List all indexed collections for this account |
+        | `get_status` | Poll status of any crawl — use after `create_crawl` returns `queued` |
+
+        **MCP protocol methods also supported:** `initialize`, `notifications/initialized`, `tools/list`
       operationId: mcpHandle
       security:
         - MCPKeyBearer: []
@@ -170,8 +209,68 @@ paths:
             schema:
               $ref: "#/components/schemas/RPCRequest"
             examples:
-              search_docs:
-                summary: Search docs
+              tools_call_search:
+                summary: MCP tools/call — search_docs
+                value:
+                  jsonrpc: "2.0"
+                  id: 1
+                  method: tools/call
+                  params:
+                    name: search_docs
+                    arguments:
+                      query: "how to define validators"
+                      top_k: 5
+              tools_call_list_crawls:
+                summary: MCP tools/call — list_crawls
+                value:
+                  jsonrpc: "2.0"
+                  id: 2
+                  method: tools/call
+                  params:
+                    name: list_crawls
+                    arguments: {}
+              tools_call_get_status:
+                summary: MCP tools/call — get_status
+                value:
+                  jsonrpc: "2.0"
+                  id: 3
+                  method: tools/call
+                  params:
+                    name: get_status
+                    arguments:
+                      crawl_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+              tools_call_create_crawl:
+                summary: MCP tools/call — create_crawl
+                value:
+                  jsonrpc: "2.0"
+                  id: 4
+                  method: tools/call
+                  params:
+                    name: create_crawl
+                    arguments:
+                      url: "https://docs.pydantic.dev/latest/"
+              tools_call_get_page:
+                summary: MCP tools/call — get_page
+                value:
+                  jsonrpc: "2.0"
+                  id: 5
+                  method: tools/call
+                  params:
+                    name: get_page
+                    arguments:
+                      url: "https://docs.pydantic.dev/latest/concepts/validators/"
+              tools_call_add_page:
+                summary: MCP tools/call — add_page
+                value:
+                  jsonrpc: "2.0"
+                  id: 6
+                  method: tools/call
+                  params:
+                    name: add_page
+                    arguments:
+                      url: "https://docs.pydantic.dev/latest/concepts/types/"
+              legacy_search:
+                summary: Legacy direct — search_docs
                 value:
                   jsonrpc: "2.0"
                   id: 1
@@ -179,22 +278,6 @@ paths:
                   params:
                     query: "how to define validators"
                     top_k: 5
-              get_page:
-                summary: Get page
-                value:
-                  jsonrpc: "2.0"
-                  id: 2
-                  method: get_page
-                  params:
-                    url: "https://docs.pydantic.dev/latest/concepts/validators/"
-              add_page:
-                summary: Add a new page
-                value:
-                  jsonrpc: "2.0"
-                  id: 3
-                  method: add_page
-                  params:
-                    url: "https://docs.pydantic.dev/latest/concepts/types/"
       responses:
         "200":
           description: JSON-RPC response (errors are in the response body, not HTTP status)
@@ -203,17 +286,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/RPCResponse"
               examples:
-                search_result:
-                  summary: search_docs result
+                tools_call_result:
+                  summary: tools/call result envelope
                   value:
                     jsonrpc: "2.0"
                     id: 1
                     result:
-                      - text: "Validators are..."
-                        page_url: "https://docs.pydantic.dev/latest/concepts/validators/"
-                        page_title: "Validators"
-                        heading_path: "Validators > Field validators"
-                        score: 0.91
+                      content:
+                        - type: text
+                          text: "[{\"text\":\"Validators are...\",\"page_url\":\"https://...\",\"score\":0.91}]"
                 method_not_found:
                   summary: Method not found error
                   value:
@@ -269,15 +350,26 @@ components:
         mcp_endpoint:
           type: string
           format: uri
-          example: http://localhost:8080/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
+          example: http://localhost:8080/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
         mcp_api_key:
           type: string
           description: MCP API key — shown once, save immediately
           example: b7e2f1a3c4d5...
         status:
           $ref: "#/components/schemas/CrawlStatusEnum"
+        claude_md:
+          type: string
+          description: |
+            Ready-to-paste CLAUDE.md snippet. Only present when `status == "ready"` and page_count > 0.
+            Contains endpoint, key, source URL, page/chunk counts, and the rule for the agent to call search_docs first.
+          example: |
+            ## DocsMCP — docs.pydantic.dev
+            Endpoint: http://localhost:8080/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
+            Key: b7e2f1a3c4d5...
+            Source: https://docs.pydantic.dev/latest/ (142 pages · 1847 chunks · 2026-06-22)
+            Rule: Always call search_docs before answering questions about this library. Use list_crawls to see all indexed collections.
 
-    CrawlStatus:
+    CrawlStatusResponse:
       type: object
       properties:
         crawl_id:
@@ -291,6 +383,37 @@ components:
         chunk_count:
           type: integer
           example: 1847
+        mcp_endpoint:
+          type: string
+          format: uri
+          example: http://localhost:8080/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
+
+    CrawlListEntry:
+      type: object
+      properties:
+        crawl_id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+          example: https://docs.pydantic.dev/latest/
+        status:
+          $ref: "#/components/schemas/CrawlStatusEnum"
+        page_count:
+          type: integer
+          example: 142
+        chunk_count:
+          type: integer
+          example: 1847
+        crawled_at:
+          type: string
+          format: date
+          example: "2026-06-22"
+        mcp_endpoint:
+          type: string
+          format: uri
+          example: http://localhost:8080/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
 
     CrawlStatusEnum:
       type: string
@@ -311,12 +434,19 @@ components:
           example: 1
         method:
           type: string
-          enum: [search_docs, get_page, add_page]
+          enum:
+            - tools/call
+            - tools/list
+            - initialize
+            - notifications/initialized
+            - search_docs
+            - get_page
+            - add_page
+            - create_crawl
+            - list_crawls
+            - get_status
         params:
-          oneOf:
-            - $ref: "#/components/schemas/SearchDocsParams"
-            - $ref: "#/components/schemas/GetPageParams"
-            - $ref: "#/components/schemas/AddPageParams"
+          description: Shape depends on method — see examples above
 
     SearchDocsParams:
       type: object
@@ -348,6 +478,40 @@ components:
           format: uri
           example: https://docs.pydantic.dev/latest/concepts/types/
 
+    CreateCrawlParams:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Root URL of the documentation to crawl
+          example: https://docs.pydantic.dev/latest/
+
+    GetStatusParams:
+      type: object
+      properties:
+        crawl_id:
+          type: string
+          format: uuid
+          description: Crawl ID to check. Omit to check the current session's crawl.
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+
+    CreateCrawlResult:
+      type: object
+      properties:
+        crawl_id:
+          type: string
+          format: uuid
+        mcp_endpoint:
+          type: string
+          format: uri
+        mcp_api_key:
+          type: string
+          description: New MCP API key — shown once, save it
+        status:
+          $ref: "#/components/schemas/CrawlStatusEnum"
+
     SearchResult:
       type: object
       properties:
@@ -377,7 +541,10 @@ components:
             - type: integer
             - type: string
         result:
-          description: Present on success — shape depends on method
+          description: |
+            Present on success. Shape depends on method:
+            - `tools/call`: `{content:[{type:"text",text:"<json-encoded result>"}]}`
+            - Legacy direct methods: raw result object or array
         error:
           $ref: "#/components/schemas/RPCError"
 

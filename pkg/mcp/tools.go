@@ -258,6 +258,46 @@ func (t *Tools) ListCrawls(ctx context.Context, crawlID string) ([]ListCrawlEntr
 	return entries, nil
 }
 
+type CrawlStatus struct {
+	CrawlID     string `json:"crawl_id"`
+	Status      string `json:"status"`
+	PageCount   int    `json:"page_count"`
+	ChunkCount  int    `json:"chunk_count"`
+	MCPEndpoint string `json:"mcp_endpoint"`
+	ReadyAt     string `json:"ready_at,omitempty"`
+}
+
+// GetStatus returns the current status of any crawl_id.
+// Useful after create_crawl returns "queued" — poll until status == "ready",
+// then switch to search_docs on the returned mcp_endpoint.
+func (t *Tools) GetStatus(ctx context.Context, queryCrawlID string) (*CrawlStatus, error) {
+	tracer := t.logger.Tracer("mcp")
+	ctx, span := tracer.Start(ctx, "mcp.get_status")
+	defer span.End()
+	span.SetAttributes(attribute.String("query_crawl_id", queryCrawlID))
+
+	cr, err := t.db.GetCrawlByID(ctx, queryCrawlID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(ion.StatusError, "crawl not found")
+		return nil, fmt.Errorf("crawl not found: %s", queryCrawlID)
+	}
+
+	readyAt := ""
+	if cr.ReadyAt != nil {
+		readyAt = cr.ReadyAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	span.SetAttributes(attribute.String("status", cr.Status))
+	return &CrawlStatus{
+		CrawlID:     cr.ID,
+		Status:      cr.Status,
+		PageCount:   cr.PageCount,
+		ChunkCount:  cr.ChunkCount,
+		MCPEndpoint: fmt.Sprintf("%s/v1/mcp/%s", t.host, cr.ID),
+		ReadyAt:     readyAt,
+	}, nil
+}
+
 // minSearchScore is the minimum RRF fusion score required to include a result.
 // RRF scores are not cosine similarities — they reflect rank fusion position.
 // 0.01 is a practical floor that filters near-zero ranked results while keeping

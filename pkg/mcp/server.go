@@ -270,6 +270,21 @@ func (s *Server) callTool(ctx context.Context, crawlID, name string, args json.R
 		b, _ := json.MarshalIndent(res, "", "  ")
 		return toolResult{Content: []toolContent{{Type: "text", Text: string(b)}}}, nil
 
+	case "get_status":
+		var p struct {
+			CrawlID string `json:"crawl_id"`
+		}
+		json.Unmarshal(args, &p)
+		if p.CrawlID == "" {
+			p.CrawlID = crawlID
+		}
+		res, err := s.tools.GetStatus(ctx, p.CrawlID)
+		if err != nil {
+			return nil, &rpcError{Code: -32000, Message: err.Error()}
+		}
+		b, _ := json.MarshalIndent(res, "", "  ")
+		return toolResult{Content: []toolContent{{Type: "text", Text: string(b)}}}, nil
+
 	default:
 		return nil, &rpcError{Code: -32601, Message: "tool not found: " + name}
 	}
@@ -329,6 +344,16 @@ func toolDefinitions() []gin.H {
 			"inputSchema": gin.H{
 				"type":       "object",
 				"properties": gin.H{},
+			},
+		},
+		{
+			"name":        "get_status",
+			"description": "Poll the status of a crawl job. Use this after create_crawl returns status 'queued' to wait for it to become 'ready'. When status == 'ready', use the returned mcp_endpoint and your mcp_api_key to query that collection. Omit crawl_id to check the current session's crawl.",
+			"inputSchema": gin.H{
+				"type": "object",
+				"properties": gin.H{
+					"crawl_id": gin.H{"type": "string", "description": "Crawl ID to check. Defaults to the current session's crawl_id if omitted."},
+				},
 			},
 		},
 	}
