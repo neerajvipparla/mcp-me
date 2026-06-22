@@ -22,6 +22,7 @@ package strategies
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -53,34 +54,69 @@ func (h *PlainHTTPHandler) Handle(ctx context.Context, url string) (*types.Fetch
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
+		crawlerLogger.Warn(ctx, "plainhttp: build request failed: falling back",
+			ion.String("file", "plainhttp.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+			ion.String("error", err.Error()),
+		)
 		return h.TryNext(ctx, url)
 	}
 	req.Header.Set("User-Agent", "DocsMCP/1.0")
 
 	resp, err := h.client.Do(req)
 	if err != nil {
+		crawlerLogger.Warn(ctx, "plainhttp: request failed: falling back",
+			ion.String("file", "plainhttp.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+			ion.String("error", err.Error()),
+		)
 		return h.TryNext(ctx, url)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		span.SetAttributes(attribute.Int("status_code", resp.StatusCode))
+		crawlerLogger.Warn(ctx, "plainhttp: non-200 response: falling back",
+			ion.String("file", "plainhttp.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+			ion.String("status_code", fmt.Sprintf("%d", resp.StatusCode)),
+		)
 		return h.TryNext(ctx, url)
 	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
+		crawlerLogger.Warn(ctx, "plainhttp: html parse failed: falling back",
+			ion.String("file", "plainhttp.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+			ion.String("error", err.Error()),
+		)
 		return h.TryNext(ctx, url)
 	}
 
 	doc.Find("nav, footer, header, script, style, .sidebar, #sidebar").Remove()
 
 	if len(strings.TrimSpace(doc.Text())) < minContentLength {
+		crawlerLogger.Warn(ctx, "plainhttp: content below threshold: falling back",
+			ion.String("file", "plainhttp.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+		)
 		return h.TryNext(ctx, url)
 	}
 
 	html, err := doc.Html()
 	if err != nil {
+		crawlerLogger.Warn(ctx, "plainhttp: html serialization failed: falling back",
+			ion.String("file", "plainhttp.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+			ion.String("error", err.Error()),
+		)
 		return h.TryNext(ctx, url)
 	}
 

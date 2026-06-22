@@ -62,10 +62,21 @@ func (h *ChromedpHandler) Handle(ctx context.Context, url string) (*types.FetchR
 	)
 	if err != nil {
 		span.RecordError(err)
+		crawlerLogger.Warn(ctx, "chromedp fetch failed: falling back",
+			ion.String("file", "chromedp.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+			ion.String("error", err.Error()),
+		)
 		return h.TryNext(ctx, url)
 	}
 
 	if len(strings.TrimSpace(html)) < minContentLength {
+		crawlerLogger.Warn(ctx, "chromedp: content below threshold: falling back",
+			ion.String("file", "chromedp.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+		)
 		return h.TryNext(ctx, url)
 	}
 

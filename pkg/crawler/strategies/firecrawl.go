@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -88,6 +89,12 @@ func (h *FirecrawlHandler) Handle(ctx context.Context, url string) (*types.Fetch
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.baseURL+"/v1/scrape", bytes.NewReader(body))
 	if err != nil {
+		crawlerLogger.Warn(ctx, "firecrawl: build request failed: falling back",
+			ion.String("file", "firecrawl.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+			ion.String("error", err.Error()),
+		)
 		return h.TryNext(ctx, url)
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -96,25 +103,60 @@ func (h *FirecrawlHandler) Handle(ctx context.Context, url string) (*types.Fetch
 	resp, err := h.client.Do(req)
 	if err != nil {
 		span.RecordError(err)
+		crawlerLogger.Warn(ctx, "firecrawl: request failed: falling back",
+			ion.String("file", "firecrawl.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+			ion.String("error", err.Error()),
+		)
 		return h.TryNext(ctx, url)
 	}
 	defer resp.Body.Close()
 
 	span.SetAttributes(attribute.Int("status_code", resp.StatusCode))
 	switch resp.StatusCode {
-	case http.StatusTooManyRequests, http.StatusUnauthorized:
+	case http.StatusTooManyRequests:
+		crawlerLogger.Warn(ctx, "firecrawl: rate limited: falling back",
+			ion.String("file", "firecrawl.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+		)
+		return h.TryNext(ctx, url)
+	case http.StatusUnauthorized:
+		crawlerLogger.Warn(ctx, "firecrawl: unauthorized (check api key): falling back",
+			ion.String("file", "firecrawl.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+		)
 		return h.TryNext(ctx, url)
 	}
 	if resp.StatusCode != http.StatusOK {
+		crawlerLogger.Warn(ctx, "firecrawl: non-200 response: falling back",
+			ion.String("file", "firecrawl.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+			ion.String("status_code", fmt.Sprintf("%d", resp.StatusCode)),
+		)
 		return h.TryNext(ctx, url)
 	}
 
 	var result firecrawlResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		span.RecordError(err)
+		crawlerLogger.Warn(ctx, "firecrawl: response decode failed: falling back",
+			ion.String("file", "firecrawl.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+			ion.String("error", err.Error()),
+		)
 		return h.TryNext(ctx, url)
 	}
 	if !result.Success || result.Data.Markdown == "" {
+		crawlerLogger.Warn(ctx, "firecrawl: empty or failed result: falling back",
+			ion.String("file", "firecrawl.go"),
+			ion.String("func", "Handle"),
+			ion.String("url", url),
+		)
 		return h.TryNext(ctx, url)
 	}
 

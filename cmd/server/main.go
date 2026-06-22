@@ -104,7 +104,14 @@ func main() {
 	)
 
 	// ── Shared chromedp allocator ────────────────────────────────────────────
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, chromedp.DefaultExecAllocatorOptions[:]...)
+	// --no-sandbox: required when the process runs as root (Docker default).
+	// --disable-dev-shm-usage: Docker limits /dev/shm to 64MB by default; this
+	//   makes Chrome use /tmp instead, preventing crashes on memory-heavy pages.
+	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+	)
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, allocOpts...)
 	defer cancelAlloc()
 	chain := strategies.DefaultFetchChain(allocCtx)
 

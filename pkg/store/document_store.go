@@ -25,6 +25,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/neerajvipparla/ion"
@@ -91,7 +92,9 @@ func (s *DocumentStore) EnsureCollection(ctx context.Context, name string) error
 					ion.String("func", "EnsureCollection"),
 					ion.String("collection", name),
 				)
-				return nil // already the hybrid schema
+				// Collection exists with correct schema — ensure page_url index
+				// exists even if collection pre-dates this requirement.
+				return s.ensurePageURLIndex(ctx, name)
 			}
 		}
 		// Old single-vector schema — drop and recreate.
@@ -113,7 +116,7 @@ func (s *DocumentStore) EnsureCollection(ctx context.Context, name string) error
 		ion.String("func", "EnsureCollection"),
 		ion.String("collection", name),
 	)
-	return s.client.CreateCollection(ctx, &qdrantgo.CreateCollection{
+	if err := s.client.CreateCollection(ctx, &qdrantgo.CreateCollection{
 		CollectionName: name,
 		VectorsConfig: qdrantgo.NewVectorsConfigMap(map[string]*qdrantgo.VectorParams{
 			denseVec: {Size: minilmDims, Distance: qdrantgo.Distance_Cosine},
@@ -121,7 +124,24 @@ func (s *DocumentStore) EnsureCollection(ctx context.Context, name string) error
 		SparseVectorsConfig: qdrantgo.NewSparseVectorsConfig(map[string]*qdrantgo.SparseVectorParams{
 			sparseVec: {Modifier: qdrantgo.Modifier_Idf.Enum()},
 		}),
+	}); err != nil {
+		return err
+	}
+	return s.ensurePageURLIndex(ctx, name)
+}
+
+// ensurePageURLIndex creates a keyword payload index on page_url if it does not
+// already exist. Qdrant is idempotent — calling this on a collection that already
+// has the index is a no-op.
+func (s *DocumentStore) ensurePageURLIndex(ctx context.Context, name string) error {
+	wait := true
+	_, err := s.client.CreateFieldIndex(ctx, &qdrantgo.CreateFieldIndexCollection{
+		CollectionName: name,
+		FieldName:      "page_url",
+		FieldType:      qdrantgo.FieldType_FieldTypeKeyword.Enum(),
+		Wait:           &wait,
 	})
+	return err
 }
 
 // Time: O(n) where n = len(texts); dominated by Qdrant gRPC round-trip + server-side embedding.
@@ -219,6 +239,8 @@ func (s *DocumentStore) Search(ctx context.Context, collection, query string, to
 // GetByURL returns all stored chunks for a specific page URL via payload filter scroll.
 // Time: O(n) where n = chunks stored for pageURL; dominated by Qdrant scroll.
 func (s *DocumentStore) GetByURL(ctx context.Context, collection, pageURL string) ([]SearchResult, error) {
+	pageURL = strings.TrimRight(pageURL, "/")
+
 	tracer := s.logger.Tracer("store")
 	ctx, span := tracer.Start(ctx, "store.get_by_url")
 	defer span.End()
@@ -226,6 +248,18 @@ func (s *DocumentStore) GetByURL(ctx context.Context, collection, pageURL string
 		attribute.String("collection", collection),
 		attribute.String("page_url", pageURL),
 	)
+
+	// Ensure the keyword index exists before filtering. Collections created
+	// before this requirement was added won't have it; CreateFieldIndex is
+	// idempotent so this is a no-op for collections that already have it.
+	if err := s.ensurePageURLIndex(ctx, collection); err != nil {
+		s.logger.Warn(ctx, "failed to ensure page_url index",
+			ion.String("file", "document_store.go"),
+			ion.String("func", "GetByURL"),
+			ion.String("collection", collection),
+			ion.String("error", err.Error()),
+		)
+	}
 
 	resp, err := s.client.Scroll(ctx, &qdrantgo.ScrollPoints{
 		CollectionName: collection,
