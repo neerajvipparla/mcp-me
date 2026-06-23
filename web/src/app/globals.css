@@ -1,0 +1,129 @@
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --accent: #5D4EFA;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: #080B10;
+  color: #EEF0F6;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* ── Selection ── */
+::selection {
+  background: rgba(93, 78, 250, 0.35);
+  color: #EEF0F6;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #080B10; }
+::-webkit-scrollbar-thumb { background: #1C2333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #2C3550; }
+
+/* ── Focus visible ── */
+:focus-visible {
+  outline: 2px solid #5D4EFA;
+  outline-offset: 2px;
+}
+
+/* ── Pipeline animation ── */
+@keyframes pipeline-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes progress-fill {
+  from { width: 0%; }
+  to { width: 100%; }
+}
+
+@keyframes float-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-right {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(400%); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 20px rgba(93, 78, 250, 0.2); }
+  50% { box-shadow: 0 0 40px rgba(93, 78, 250, 0.5); }
+}
+
+@keyframes ready-glow {
+  0%, 100% { box-shadow: 0 0 12px rgba(240, 165, 0, 0.2); }
+  50% { box-shadow: 0 0 28px rgba(240, 165, 0, 0.5); }
+}
+
+.animate-float-in {
+  animation: float-in 0.5s ease forwards;
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 2s ease-in-out infinite;
+}
+
+.animate-ready-glow {
+  animation: ready-glow 2s ease-in-out infinite;
+}
+
+/* ── Stage progress bar ── */
+.stage-progress {
+  animation: progress-fill linear forwards;
+}
+
+/* ── Marquee ── */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee 30s linear infinite;
+}
+
+.marquee-track:hover {
+  animation-play-state: paused;
+}
+
+/* ── Terminal cursor ── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.cursor-blink::after {
+  content: '▋';
+  animation: blink 1s step-end infinite;
+  margin-left: 1px;
+  color: #5D4EFA;
+}
+
+/* ── Reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -80,6 +80,19 @@ func (s *PostgresStore) CreateUser(ctx context.Context, r *UserRecord) error {
 	return err
 }
 
+// UpsertUserByEmail creates the user on first GitHub login, or rotates the
+// platform API key hash on subsequent logins. Safe to call on every OAuth login.
+func (s *PostgresStore) UpsertUserByEmail(ctx context.Context, r *UserRecord) error {
+  _, err := s.pool.Exec(ctx,
+    `INSERT INTO users (id, email, platform_api_key_hash, created_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (email)
+     DO UPDATE SET platform_api_key_hash = EXCLUDED.platform_api_key_hash`,
+    r.ID, r.Email, r.PlatformAPIKeyHash,
+  )
+  return err
+}
+
 // FindUserByKeyHash looks up a user by SHA-256 hex of their platform API key.
 // Returns "", nil when not found — callers treat empty string as unauthenticated.
 func (s *PostgresStore) FindUserByKeyHash(ctx context.Context, keyHash string) (string, error) {
