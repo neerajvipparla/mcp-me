@@ -148,7 +148,9 @@ func main() {
 	queue := asynq.NewClient(redisOpt)
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
-	r := gin.Default()
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(api.IonRecovery(), api.IonLogger())
 	r.SetTrustedProxies(nil)
 
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })

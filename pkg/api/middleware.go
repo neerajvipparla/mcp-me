@@ -17,7 +17,9 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/neerajvipparla/ion"
@@ -54,6 +56,51 @@ func PlatformKeyAuth(db store.UserDB) gin.HandlerFunc {
 			return
 		}
 		c.Set("user_id", userID)
+		c.Next()
+	}
+}
+
+// IonLogger logs every HTTP request through ion so access logs reach ClickHouse
+// alongside application logs. Call c.Next() first captures the actual response status.
+func IonLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		latencyMs := float64(time.Since(start).Microseconds()) / 1000
+		status := c.Writer.Status()
+		logFn := logger.Info
+		if status >= 400 {
+			logFn = logger.Warn
+		}
+		logFn(c.Request.Context(), "request",
+			ion.String("file", "middleware.go"),
+			ion.String("func", "IonLogger"),
+			ion.String("method", c.Request.Method),
+			ion.String("path", c.Request.URL.Path),
+			ion.String("status", fmt.Sprintf("%d", status)),
+			ion.String("latency_ms", fmt.Sprintf("%.2f", latencyMs)),
+			ion.String("ip", c.ClientIP()),
+		)
+	}
+}
+
+// IonRecovery catches panics, logs them through ion, and returns 500.
+func IonRecovery() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if r := recover(); r != nil {
+				err, ok := r.(error)
+				if !ok {
+					err = fmt.Errorf("panic: %v", r)
+				}
+				logger.Error(c.Request.Context(), "panic recovered", err,
+					ion.String("file", "middleware.go"),
+					ion.String("func", "IonRecovery"),
+					ion.String("path", c.Request.URL.Path),
+				)
+				c.AbortWithStatus(500)
+			}
+		}()
 		c.Next()
 	}
 }
