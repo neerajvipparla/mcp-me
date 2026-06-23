@@ -118,7 +118,7 @@ func Setup(logDir string, logFileName string) (*ion.Ion, []ion.Warning, error) {
 				DSN:           dsn,
 				Table:         ClickHouseTable,
 				AutoSchema:    true,
-				FlushInterval: 3 * time.Second,
+				FlushInterval: 1 * time.Second,
 			}
 		}
 

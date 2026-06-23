@@ -25,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -47,6 +46,18 @@ import (
 	"github.com/neerajvipparla/mcp-me/pkg/worker"
 )
 
+// fatal logs the error via ion, flushes ClickHouse, then exits.
+// Use instead of log.Fatal so buffered logs are never lost on startup failures.
+func fatal(msg string, err error) {
+	ctx := context.Background()
+	logging.Get(logging.TopicServer).Error(ctx, msg, err,
+		ion.String("file", "main.go"),
+		ion.String("func", "main"),
+	)
+	logging.NewAsyncLogger().Shutdown()
+	os.Exit(1)
+}
+
 func main() {
 	ctx := context.Background()
 	logger := logging.Get(logging.TopicServer)
@@ -54,7 +65,7 @@ func main() {
 	// ── Config (non-secret) ──────────────────────────────────────────────────
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
-		log.Fatal("config:", err)
+		fatal("config load failed", err)
 	}
 	logger.Info(ctx, "config loaded",
 		ion.String("file", "main.go"),
@@ -75,11 +86,7 @@ func main() {
 	dbPassword := os.Getenv("DATABASE_PASSWORD")
 	redisOpt, err := redisConnOpt()
 	if err != nil {
-		logger.Error(ctx, "redis config invalid", err,
-			ion.String("file", "main.go"),
-			ion.String("func", "main"),
-		)
-		log.Fatal("redis:", err)
+		fatal("redis config invalid", err)
 	}
 
 	// ── Qdrant client ────────────────────────────────────────────────────────
@@ -88,11 +95,7 @@ func main() {
 	qdrantCfg := qdrantcfg.From(cfg.Qdrant.ResolvedHost(), cfg.Qdrant.Port, qdrantAPIKey)
 	qdrantClient, err := qdrantcfg.NewClient(qdrantCfg)
 	if err != nil {
-		logger.Error(ctx, "qdrant connect failed", err,
-			ion.String("file", "main.go"),
-			ion.String("func", "main"),
-		)
-		log.Fatal("qdrant:", err)
+		fatal("qdrant connect failed", err)
 	}
 	logger.Info(ctx, "qdrant connected",
 		ion.String("file", "main.go"),
@@ -105,11 +108,7 @@ func main() {
 	// ── Postgres ─────────────────────────────────────────────────────────────
 	pg, err := store.NewPostgresStore(ctx, cfg.Postgres.DSN(dbPassword))
 	if err != nil {
-		logger.Error(ctx, "postgres connect failed", err,
-			ion.String("file", "main.go"),
-			ion.String("func", "main"),
-		)
-		log.Fatal("postgres:", err)
+		fatal("postgres connect failed", err)
 	}
 	logger.Info(ctx, "postgres connected",
 		ion.String("file", "main.go"),
@@ -137,7 +136,7 @@ func main() {
 	mux.HandleFunc(worker.TaskCrawlPipeline, worker.NewPipelineHandler(pg, vs, chain).ProcessTask)
 	go func() {
 		if err := asynqSrv.Run(mux); err != nil {
-			log.Fatal("asynq worker:", err)
+			fatal("asynq worker crashed", err)
 		}
 	}()
 	logger.Info(ctx, "worker started",
@@ -184,7 +183,7 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal("http server:", err)
+			fatal("http server crashed", err)
 		}
 	}()
 
@@ -205,7 +204,6 @@ func main() {
 			ion.String("file", "main.go"),
 			ion.String("func", "main"),
 		)
-		log.Fatal("forced shutdown:", err)
 	}
 	logger.Info(ctx, "server stopped",
 		ion.String("file", "main.go"),
