@@ -301,11 +301,15 @@ All operations are traced via OpenTelemetry spans — flushed to ClickHouse alon
 
 The server is stateless. Postgres and Redis are the only stateful components; Qdrant holds the vectors.
 
-```bash
-# Fly.io example
-fly launch
-fly secrets set QDRANT_API_KEY=... DATABASE_URL=... CLICKHOUSE_DSN=...
-fly deploy
-```
+Set the following environment variables on your host:
 
-Point Claude Desktop at `https://your-app.fly.dev/v1/mcp/<crawl_id>` instead of localhost.
+| Variable | Required | Purpose |
+|---|---|---|
+| `QDRANT_API_KEY` | yes (cloud) | Qdrant Cloud auth + TLS |
+| `DATABASE_URL` | yes | Postgres connection string |
+| `REDIS_URL` | yes | Redis URI (`redis://` or `rediss://` for TLS) |
+| `SERVER_HOST` | yes | Public base URL baked into every `mcp_endpoint` (e.g. `https://your-app.railway.app`) |
+| `CLICKHOUSE_DSN` | optional | ClickHouse Cloud DSN for structured logs |
+| `FIRECRAWL_URL` | optional | Firecrawl API key — last-resort JS-heavy crawler |
+
+Point Claude Desktop at `https://<your-host>/v1/mcp/<crawl_id>` instead of localhost.
