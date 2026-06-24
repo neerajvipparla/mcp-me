@@ -2,23 +2,17 @@
 // PURPOSE: JSON-RPC 2.0 HTTP handler for /mcp/:crawl_id.
 //          Implements the MCP protocol (initialize, tools/list, tools/call)
 //          so Claude Code and Cursor can connect directly.
-//          Owns mcp_api_key verification (bcrypt) and request routing to Tools.
-//
-// CORE DATA STRUCTURES:
-//   - rpcRequest / rpcResponse: per-request value structs, not retained.
+//          Auth: platform API key (SHA-256) — same key the user gets after GitHub OAuth.
+//          Ownership verified: key → userID → must match user_crawls.user_id for this crawl_id.
 //
 // TO MODIFY BEHAVIOR:
 //   - Add a new tool: add a case in callTool(), add its definition in toolDefinitions().
-//   - Change auth scheme: edit the key extraction and bcrypt check block.
-//
-// DO NOT:
-//   - Import *PostgresStore — depends on store.CrawlDB only.
-//   - Use bcrypt for platform_api_key — that uses SHA-256 (see middleware.go).
-//     bcrypt is correct here because mcp_api_key is verified per session, not DB-looked-up.
 package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,7 +22,6 @@ import (
 	"github.com/neerajvipparla/ion"
 	"github.com/neerajvipparla/mcp-me/logging"
 	"github.com/neerajvipparla/mcp-me/pkg/store"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type rpcRequest struct {
@@ -61,11 +54,11 @@ type toolResult struct {
 
 type Server struct {
 	tools  *Tools
-	db     store.CrawlDB
+	db     store.DB
 	logger *ion.Ion
 }
 
-func NewServer(tools *Tools, db store.CrawlDB) *Server {
+func NewServer(tools *Tools, db store.DB) *Server {
 	return &Server{tools: tools, db: db, logger: logging.Get(logging.TopicMCP)}
 }
 
@@ -91,15 +84,28 @@ func (s *Server) Handle(c *gin.Context) {
 		return
 	}
 
-	uc, err := s.db.GetUserCrawlByCrawlID(c.Request.Context(), crawlID)
-	if err != nil || bcrypt.CompareHashAndPassword([]byte(uc.MCPAPIKeyHash), []byte(key)) != nil {
+	h := sha256.Sum256([]byte(key))
+	keyHash := hex.EncodeToString(h[:])
+	userID, err := s.db.FindUserByKeyHash(c.Request.Context(), keyHash)
+	if err != nil || userID == "" {
 		s.logger.Warn(c.Request.Context(), "auth failed",
 			ion.String("file", "server.go"),
 			ion.String("func", "Handle"),
-			ion.String("type", "invalid mcp_api_key"),
+			ion.String("type", "invalid api key"),
 			ion.String("crawl_id", crawlID),
 		)
-		c.JSON(401, gin.H{"error": "invalid mcp_api_key"})
+		c.JSON(401, gin.H{"error": "invalid api key"})
+		return
+	}
+	uc, err := s.db.GetUserCrawlByCrawlID(c.Request.Context(), crawlID)
+	if err != nil || uc.UserID != userID {
+		s.logger.Warn(c.Request.Context(), "auth failed",
+			ion.String("file", "server.go"),
+			ion.String("func", "Handle"),
+			ion.String("type", "crawl not owned by user"),
+			ion.String("crawl_id", crawlID),
+		)
+		c.JSON(401, gin.H{"error": "invalid api key"})
 		return
 	}
 
@@ -116,7 +122,6 @@ func (s *Server) Handle(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	userID := uc.UserID
 	var result any
 	var rpcErr *rpcError
 

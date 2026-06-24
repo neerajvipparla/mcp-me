@@ -53,9 +53,9 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
   )
 }
 
-function CollectionCard({ col, onPoll }: { col: Collection; onPoll: () => void }) {
+function CollectionCard({ col, apiKey, onPoll }: { col: Collection; apiKey: string; onPoll: () => void }) {
   const isActive = ["queued", "crawling", "chunking", "embedding"].includes(col.status)
-  const endpointCmd = `claude mcp add docs-${new URL(col.url).hostname.replace(/\./g, "-")} --transport http ${col.mcp_endpoint} --header "Authorization: Bearer <mcp_api_key>"`
+  const endpointCmd = `claude mcp add docs-${new URL(col.url).hostname.replace(/\./g, "-")} --transport http ${col.mcp_endpoint} --header "Authorization: Bearer ${apiKey}"`
 
   // Poll while active
   useEffect(() => {
@@ -197,7 +197,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const fetchedKey = useRef(false)
 
-  // Auth check
+  // Auth check + trigger API key fetch
   useEffect(() => {
     authClient.getSession().then(({ data }) => {
       if (!data?.session) {
@@ -205,23 +205,22 @@ export default function DashboardPage() {
         return
       }
       setSession(data as any)
+      fetchApiKey()
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router])
 
-  // Fetch API key from Go backend (after OAuth, exchange GitHub token for DocsMCP key)
-  const fetchApiKey = useCallback(async (githubToken: string) => {
+  // Fetch mcp-me API key via server-side route (reads GitHub token from Better Auth session)
+  const fetchApiKey = useCallback(async () => {
     if (fetchedKey.current) return
     fetchedKey.current = true
     try {
-      const res = await fetch(`${API}/v1/auth/github`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ github_token: githubToken }),
-      })
+      const res = await fetch("/api/docsmcp-key")
       const data = await res.json()
       if (data.api_key) setApiKey(data.api_key)
+      else setLoading(false)
     } catch {
-      /* silent — user may not have token yet */
+      setLoading(false)
     }
   }, [])
 
@@ -258,7 +257,7 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-bg">
       {/* Nav */}
       <nav className="border-b border-border px-6 h-16 flex items-center justify-between">
-        <span className="font-serif italic text-xl text-tx">DocsMCP</span>
+        <span className="font-serif italic text-xl text-tx">mcp-me</span>
         <div className="flex items-center gap-4">
           <span className="text-sm text-tx-muted">{session.user.email}</span>
           <button
@@ -326,6 +325,7 @@ export default function DashboardPage() {
               <CollectionCard
                 key={col.crawl_id}
                 col={col}
+                apiKey={apiKey}
                 onPoll={() => loadCollections(apiKey)}
               />
             ))
@@ -337,7 +337,7 @@ export default function DashboardPage() {
           <div className="mt-10 rounded-xl border border-border bg-surface-raised p-6">
             <p className="text-xs font-mono text-tx-muted mb-3">CLAUDE.md snippet</p>
             <div className="rounded-lg bg-code border border-border p-4 font-mono text-xs text-tx-muted space-y-1">
-              <p className="text-accent">## DocsMCP</p>
+              <p className="text-accent">## mcp-me</p>
               <p>Available MCP collections:</p>
               {collections.filter(c => c.status === "ready").map(c => (
                 <p key={c.crawl_id}>- {new URL(c.url).hostname} → {c.mcp_endpoint}</p>
@@ -347,7 +347,7 @@ export default function DashboardPage() {
             <div className="mt-3 flex justify-end">
               <CopyButton
                 label="Copy CLAUDE.md snippet"
-                text={`## DocsMCP\nAvailable MCP collections:\n${collections.filter(c => c.status === "ready").map(c => `- ${new URL(c.url).hostname} → ${c.mcp_endpoint}`).join("\n")}\nCall search_docs before answering any library question.`}
+                text={`## mcp-me\nAvailable MCP collections:\n${collections.filter(c => c.status === "ready").map(c => `- ${new URL(c.url).hostname} → ${c.mcp_endpoint}`).join("\n")}\nCall search_docs before answering any library question.`}
               />
             </div>
           </div>
