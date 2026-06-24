@@ -193,6 +193,7 @@ export default function DashboardPage() {
   const [session, setSession] = useState<{ user: { email: string; name: string } } | null>(null)
   const [apiKey, setApiKey] = useState("")
   const [keyVisible, setKeyVisible] = useState(false)
+  const [keyExistsButHidden, setKeyExistsButHidden] = useState(false)
   const [collections, setCollections] = useState<Collection[]>([])
   const [loading, setLoading] = useState(true)
   const fetchedKey = useRef(false)
@@ -218,6 +219,7 @@ export default function DashboardPage() {
       const res = await fetch("/api/docsmcp-key")
       const data = await res.json()
       if (data.api_key) setApiKey(data.api_key)
+      else if (data.has_key) setKeyExistsButHidden(true)
       else setLoading(false)
     } catch {
       setLoading(false)
@@ -290,6 +292,20 @@ export default function DashboardPage() {
                 {keyVisible ? "Hide" : "Show"}
               </button>
               <CopyButton text={apiKey} />
+            </div>
+          ) : keyExistsButHidden ? (
+            <div className="rounded-lg bg-code border border-border px-3 py-2.5 flex items-center justify-between">
+              <p className="text-sm font-mono text-tx-muted">Key set — copy it from where you saved it</p>
+              <button
+                onClick={async () => {
+                  const res = await fetch("/api/docsmcp-key/rotate", { method: "POST" })
+                  const data = await res.json()
+                  if (data.api_key) { setApiKey(data.api_key); setKeyExistsButHidden(false) }
+                }}
+                className="text-xs px-3 py-1 rounded border border-border text-tx-muted hover:text-red-400 hover:border-red-400/40 transition-colors ml-4 shrink-0"
+              >
+                Regenerate
+              </button>
             </div>
           ) : (
             <div className="rounded-lg bg-code border border-border px-3 py-2.5">

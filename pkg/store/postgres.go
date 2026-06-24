@@ -80,17 +80,34 @@ func (s *PostgresStore) CreateUser(ctx context.Context, r *UserRecord) error {
 	return err
 }
 
-// UpsertUserByEmail creates the user on first GitHub login, or rotates the
-// platform API key hash on subsequent logins. Safe to call on every OAuth login.
-func (s *PostgresStore) UpsertUserByEmail(ctx context.Context, r *UserRecord) error {
-  _, err := s.pool.Exec(ctx,
-    `INSERT INTO users (id, email, platform_api_key_hash, created_at)
-     VALUES ($1, $2, $3, now())
-     ON CONFLICT (email)
-     DO UPDATE SET platform_api_key_hash = EXCLUDED.platform_api_key_hash`,
-    r.ID, r.Email, r.PlatformAPIKeyHash,
-  )
-  return err
+// UpsertUserByEmail inserts a new user with the given key hash.
+// If the email already exists AND already has a key hash, it does NOT overwrite it
+// and returns hasKey=true. If the user exists but has no key hash, it sets the hash.
+func (s *PostgresStore) UpsertUserByEmail(ctx context.Context, r *UserRecord) (bool, error) {
+	var existing string
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO users (id, email, platform_api_key_hash, created_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (email)
+		 DO UPDATE SET platform_api_key_hash = COALESCE(users.platform_api_key_hash, EXCLUDED.platform_api_key_hash)
+		 RETURNING platform_api_key_hash`,
+		r.ID, r.Email, r.PlatformAPIKeyHash,
+	).Scan(&existing)
+	if err != nil {
+		return false, err
+	}
+	// If the returned hash differs from what we tried to insert, an existing hash was kept.
+	return existing != r.PlatformAPIKeyHash, nil
+}
+
+// RotateUserKey unconditionally replaces the key hash for an existing user.
+// Used when the user explicitly requests a new key.
+func (s *PostgresStore) RotateUserKey(ctx context.Context, email, keyHash string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE users SET platform_api_key_hash = $1 WHERE email = $2`,
+		keyHash, email,
+	)
+	return err
 }
 
 // FindUserByKeyHash looks up a user by SHA-256 hex of their platform API key.

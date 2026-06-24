@@ -16,6 +16,58 @@ import (
 	"github.com/neerajvipparla/mcp-me/pkg/store"
 )
 
+// RotateKey generates a new platform API key unconditionally, replacing the old one.
+// POST /v1/auth/github/rotate
+func (h *GitHubAuthHandler) RotateKey(c *gin.Context) {
+	var req struct {
+		GithubToken string `json:"github_token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "github_token required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	ghUser, err := fetchGitHubUser(ctx, req.GithubToken)
+	if err != nil {
+		c.JSON(401, gin.H{"error": "invalid github token"})
+		return
+	}
+
+	email := ghUser.Email
+	if email == "" {
+		email = fmt.Sprintf("%s@github", ghUser.Login)
+	}
+
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		c.JSON(500, gin.H{"error": "key generation failed"})
+		return
+	}
+	key := hex.EncodeToString(raw)
+	hash := sha256.Sum256([]byte(key))
+	keyHash := hex.EncodeToString(hash[:])
+
+	if err := h.db.RotateUserKey(ctx, email, keyHash); err != nil {
+		logger.Error(ctx, "rotate key failed", err,
+			ion.String("file", "auth_github.go"),
+			ion.String("func", "RotateKey"),
+			ion.String("email", email),
+		)
+		c.JSON(500, gin.H{"error": "db error"})
+		return
+	}
+
+	logger.Info(ctx, "api key rotated",
+		ion.String("file", "auth_github.go"),
+		ion.String("func", "RotateKey"),
+		ion.String("github_login", ghUser.Login),
+	)
+
+	c.JSON(200, gin.H{"api_key": key, "email": email})
+}
+
 type GitHubAuthHandler struct {
 	db store.UserDB
 }
@@ -91,8 +143,6 @@ func (h *GitHubAuthHandler) GitHubLogin(c *gin.Context) {
 		email = fmt.Sprintf("%s@github", ghUser.Login)
 	}
 
-	// Generate a fresh API key on every login (rotation on login is intentional —
-	// the key cannot be recovered from the bcrypt hash so we always issue a new one)
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		logger.Error(ctx, "key generation failed", err,
@@ -106,12 +156,12 @@ func (h *GitHubAuthHandler) GitHubLogin(c *gin.Context) {
 	hash := sha256.Sum256([]byte(key))
 	keyHash := hex.EncodeToString(hash[:])
 
-	// Upsert user: create if first login, update key hash if returning user.
-	if err := h.db.UpsertUserByEmail(ctx, &store.UserRecord{
+	hasKey, err := h.db.UpsertUserByEmail(ctx, &store.UserRecord{
 		ID:                 uuid.NewString(),
 		Email:              email,
 		PlatformAPIKeyHash: keyHash,
-	}); err != nil {
+	})
+	if err != nil {
 		logger.Error(ctx, "upsert user failed", err,
 			ion.String("file", "auth_github.go"),
 			ion.String("func", "GitHubLogin"),
@@ -126,7 +176,13 @@ func (h *GitHubAuthHandler) GitHubLogin(c *gin.Context) {
 		ion.String("func", "GitHubLogin"),
 		ion.String("github_login", ghUser.Login),
 		ion.String("email", email),
+		ion.String("has_key", fmt.Sprintf("%v", hasKey)),
 	)
 
+	if hasKey {
+		// User already has a key stored — we can't recover it, don't overwrite it.
+		c.JSON(200, gin.H{"has_key": true, "email": email})
+		return
+	}
 	c.JSON(200, gin.H{"api_key": key, "email": email})
 }

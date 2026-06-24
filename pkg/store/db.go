@@ -26,10 +26,13 @@ type UserDB interface {
 	// FindUserByKeyHash looks up by SHA-256 hex of the platform API key.
 	// Returns "", nil when not found.
 	FindUserByKeyHash(ctx context.Context, keyHash string) (string, error)
-	// UpsertUserByEmail creates the user on first GitHub login, or rotates the
-	// platform API key hash on subsequent logins. The caller generates the key;
-	// only the SHA-256 hash is persisted.
-	UpsertUserByEmail(ctx context.Context, r *UserRecord) error
+	// UpsertUserByEmail creates the user on first GitHub login.
+	// Does NOT overwrite an existing key hash — returns has_key=true if one already exists.
+	// Returns (true, nil) when an existing key hash was found (key unchanged).
+	// Returns (false, nil) when the user was new and the key hash was written.
+	UpsertUserByEmail(ctx context.Context, r *UserRecord) (hasKey bool, err error)
+	// RotateUserKey replaces the existing key hash for the given email unconditionally.
+	RotateUserKey(ctx context.Context, email, keyHash string) error
 }
 
 // CrawlDB is the minimum interface for crawl lifecycle operations.
