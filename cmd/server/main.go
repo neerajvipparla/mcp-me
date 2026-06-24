@@ -150,7 +150,11 @@ func main() {
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(api.IonRecovery(), api.IonLogger())
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+	r.Use(api.CORS(frontendURL), api.IonRecovery(), api.IonLogger())
 	r.SetTrustedProxies(nil)
 
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })

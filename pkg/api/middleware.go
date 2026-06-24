@@ -105,6 +105,29 @@ func IonRecovery() gin.HandlerFunc {
 	}
 }
 
+// CORS handles preflight OPTIONS requests and sets Access-Control-Allow-* headers.
+// allowedOrigin should be set to the frontend URL (e.g. https://mcp-me-two.vercel.app).
+func CORS(allowedOrigin string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if origin != "" && (origin == allowedOrigin || allowedOrigin == "*") {
+			c.Header("Access-Control-Allow-Origin", origin)
+		} else if allowedOrigin == "*" {
+			c.Header("Access-Control-Allow-Origin", "*")
+		} else {
+			c.Header("Access-Control-Allow-Origin", allowedOrigin)
+		}
+		c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+		c.Header("Access-Control-Max-Age", "86400")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	}
+}
+
 func extractAPIKey(c *gin.Context) string {
 	if k := c.GetHeader("X-API-Key"); k != "" {
 		return k
