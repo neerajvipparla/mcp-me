@@ -2,11 +2,11 @@ import type { Metadata } from "next"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "DocsMCP — Give Claude the actual docs",
+  title: "mcp-me",
   description:
     "Crawl any documentation URL. Get a private MCP endpoint. Let Claude search real docs instead of guessing.",
   openGraph: {
-    title: "DocsMCP",
+    title: "mcp-me",
     description: "Give Claude the actual docs.",
     type: "website",
   },
