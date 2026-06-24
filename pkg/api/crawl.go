@@ -1,23 +1,8 @@
 // MODULE: pkg/api/crawl.go
-// PURPOSE: Handles POST /crawl and GET /crawl/:id.
-//          Owns cache-hit detection, crawl record creation, job enqueuing,
-//          and mcp_api_key generation (bcrypt-hashed, returned once).
-//
-// CORE DATA STRUCTURES: none — stateless handler.
-//
-// TO MODIFY BEHAVIOR:
-//   - Change bcrypt cost: edit bcrypt.GenerateFromPassword cost constant.
-//   - Change mcp_api_key length: update generateToken() byte count.
-//
-// DO NOT:
-//   - Log mcp_api_key — it is returned exactly once and must never appear in logs.
-//   - Accept embedder_id from the request — embedder is a server-wide config via store.EmbedderID().
-//   - Import *PostgresStore — depends only on store.CrawlDB.
+// PURPOSE: Handles POST /crawl, GET /crawl/:id, and GET /crawls.
 package api
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -29,7 +14,6 @@ import (
 	"github.com/neerajvipparla/mcp-me/pkg/store"
 	"github.com/neerajvipparla/mcp-me/pkg/worker"
 	"go.opentelemetry.io/otel/attribute"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type CrawlHandler struct {
@@ -75,7 +59,7 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 			ion.String("url", req.URL),
 			ion.String("crawl_id", existing.ID),
 		)
-		h.issueKey(c, existing, "ready", false)
+		h.linkCrawl(c, existing, "ready", false)
 		return
 	}
 
@@ -93,7 +77,7 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 			ion.String("url", req.URL),
 			ion.String("crawl_id", byPage.ID),
 		)
-		h.issueKey(c, byPage, "ready", false)
+		h.linkCrawl(c, byPage, "ready", false)
 		return
 	}
 
@@ -159,14 +143,13 @@ func (h *CrawlHandler) PostCrawl(c *gin.Context) {
 		ion.String("collection", collection),
 	)
 
-	h.issueKey(c, &store.CrawlRecord{ID: crawlID, URLRaw: req.URL}, "queued", true)
+	h.linkCrawl(c, &store.CrawlRecord{ID: crawlID, URLRaw: req.URL}, "queued", true)
 }
 
-// issueKey creates a user_crawls row, bcrypt-hashes the mcp_api_key,
-// and writes the response. mcp_api_key plaintext is never stored or logged.
-// markFailedOnError: when true (fresh crawl), marks the crawl as "failed" if
-// key issuance fails so the job's successful run isn't permanently inaccessible.
-func (h *CrawlHandler) issueKey(c *gin.Context, cr *store.CrawlRecord, status string, markFailedOnError bool) {
+// linkCrawl creates a user_crawls row linking the authenticated user to this crawl,
+// then returns the crawl_id and mcp_endpoint. Auth for the MCP endpoint uses the
+// user's platform API key (SHA-256), so no per-crawl key is generated or stored.
+func (h *CrawlHandler) linkCrawl(c *gin.Context, cr *store.CrawlRecord, status string, markFailedOnError bool) {
 	ctx := c.Request.Context()
 
 	markFailed := func() {
@@ -176,39 +159,24 @@ func (h *CrawlHandler) issueKey(c *gin.Context, cr *store.CrawlRecord, status st
 		if dbErr := h.db.UpdateCrawlStatus(ctx, cr.ID, "failed"); dbErr != nil {
 			logger.Error(ctx, "failed to mark crawl as failed", dbErr,
 				ion.String("file", "crawl.go"),
-				ion.String("func", "issueKey"),
+				ion.String("func", "linkCrawl"),
 				ion.String("crawl_id", cr.ID),
 			)
 		}
 	}
 
-	mcpKey := generateToken()
-	keyHash, err := bcrypt.GenerateFromPassword([]byte(mcpKey), bcrypt.DefaultCost)
-	if err != nil {
-		markFailed()
-		logger.Error(ctx, "key generation failed", err,
-			ion.String("file", "crawl.go"),
-			ion.String("func", "issueKey"),
-			ion.String("op", "bcrypt"),
-			ion.String("crawl_id", cr.ID),
-		)
-		c.JSON(500, gin.H{"error": "key hash failed"})
-		return
-	}
 	if err := h.db.CreateUserCrawl(ctx, &store.UserCrawlRecord{
-		ID:            uuid.NewString(),
-		UserID:        c.GetString("user_id"),
-		CrawlID:       cr.ID,
-		MCPAPIKeyHash: string(keyHash),
+		ID:      uuid.NewString(),
+		UserID:  c.GetString("user_id"),
+		CrawlID: cr.ID,
 	}); err != nil {
 		markFailed()
 		logger.Error(ctx, "db error", err,
 			ion.String("file", "crawl.go"),
-			ion.String("func", "issueKey"),
-			ion.String("op", "store mcp key"),
+			ion.String("func", "linkCrawl"),
 			ion.String("crawl_id", cr.ID),
 		)
-		c.JSON(500, gin.H{"error": "failed to store mcp key"})
+		c.JSON(500, gin.H{"error": "failed to link crawl"})
 		return
 	}
 
@@ -216,11 +184,10 @@ func (h *CrawlHandler) issueKey(c *gin.Context, cr *store.CrawlRecord, status st
 	resp := gin.H{
 		"crawl_id":     cr.ID,
 		"mcp_endpoint": endpoint,
-		"mcp_api_key":  mcpKey, // shown once, never logged
 		"status":       status,
 	}
 	if status == "ready" && cr.PageCount > 0 {
-		resp["claude_md"] = claudeMDSnippet(cr, endpoint, mcpKey)
+		resp["claude_md"] = claudeMDSnippet(cr, endpoint)
 	}
 
 	code := 202
@@ -231,18 +198,18 @@ func (h *CrawlHandler) issueKey(c *gin.Context, cr *store.CrawlRecord, status st
 }
 
 // claudeMDSnippet returns a ready-to-paste CLAUDE.md block for this crawl.
-func claudeMDSnippet(cr *store.CrawlRecord, endpoint, mcpKey string) string {
+func claudeMDSnippet(cr *store.CrawlRecord, endpoint string) string {
 	host := cr.URLRaw
 	if u, err := url.Parse(cr.URLRaw); err == nil {
 		host = u.Host
 	}
 	crawledAt := ""
 	if cr.ReadyAt != nil {
-		crawledAt = " · " + cr.ReadyAt.UTC().Format("2006-01-02")
+		crawledAt = " (" + cr.ReadyAt.UTC().Format("2006-01-02") + ")"
 	}
 	return fmt.Sprintf(
-		"## DocsMCP — %s\nEndpoint: %s\nKey: %s\nSource: %s (%d pages · %d chunks%s)\nRule: Always call search_docs before answering questions about this library. Use list_crawls to see all indexed collections.",
-		host, endpoint, mcpKey, cr.URLRaw, cr.PageCount, cr.ChunkCount, crawledAt,
+		"## mcp-me -- %s\nEndpoint: %s\nSource: %s (%d pages, %d chunks%s)\nRule: Always call search_docs before answering questions about this library.",
+		host, endpoint, cr.URLRaw, cr.PageCount, cr.ChunkCount, crawledAt,
 	)
 }
 
@@ -317,8 +284,3 @@ func (h *CrawlHandler) GetStatus(c *gin.Context) {
 	})
 }
 
-func generateToken() string {
-	raw := make([]byte, 32)
-	rand.Read(raw)
-	return hex.EncodeToString(raw)
-}

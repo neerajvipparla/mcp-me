@@ -159,6 +159,7 @@ func main() {
 	{
 		// Public — no platform key required
 		v1.POST("/register", api.NewRegisterHandler(pg).Register)
+		v1.POST("/auth/github", api.NewGitHubAuthHandler(pg).GitHubLogin)
 
 		// Protected — platform key required (pg narrowed to UserDB for auth,
 		// CrawlDB for the handler)
