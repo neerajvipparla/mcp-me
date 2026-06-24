@@ -18,9 +18,7 @@ export const db = new Kysely<{
 
 export const auth = betterAuth({
   baseURL,
-  database: {
-    dialect: new PostgresDialect({ pool }),
-  },
+  database: pool,
   socialProviders: {
     github: {
       clientId: process.env.GITHUB_CLIENT_ID!,

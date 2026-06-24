@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s https://mcp-me-production.up.railway.app/*)",
+      "Bash(curl -s -X POST https://mcp-me-production.up.railway.app/*)",
+      "Bash(curl -sS https://mcp-me-production.up.railway.app/*)",
+      "Bash(claude mcp add *)",
+      "Bash(claude mcp list*)",
+      "Write(.mcpme/*)"
+    ]
+  }
+}

@@ -42,13 +42,16 @@ type Filter struct {
 }
 
 // NewFilter builds a Filter anchored to rootURL's domain and path.
+// Both www and non-www variants of the domain are accepted so that sitemaps
+// returning bare-domain URLs (better-auth.com) match a www-prefixed root
+// (www.better-auth.com) and vice-versa.
 func NewFilter(rootURL string) (*Filter, error) {
 	u, err := url.Parse(rootURL)
 	if err != nil {
 		return nil, err
 	}
 	return &Filter{
-		domain:         u.Hostname(),
+		domain:         strings.TrimPrefix(u.Hostname(), "www."),
 		rootPath:       strings.TrimRight(u.Path, "/"),
 		skipExtensions: defaultSkipExtensions,
 		skipPatterns:   defaultSkipPatterns,
@@ -62,7 +65,7 @@ func (f *Filter) Allow(rawURL string) bool {
 		return false
 	}
 
-	if u.Hostname() != f.domain {
+	if strings.TrimPrefix(u.Hostname(), "www.") != f.domain {
 		return false
 	}
 

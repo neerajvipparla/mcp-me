@@ -1,0 +1,9 @@
+{
+  "name": "mcp-me",
+  "description": "Autonomous documentation intelligence — crawls any docs URL, embeds it, and lets agents search with full cited answers. Agent handles everything after the human provides an API key once.",
+  "version": "1.0.0",
+  "author": {
+    "name": "neerajvipparla"
+  },
+  "skills": "./skills/"
+}

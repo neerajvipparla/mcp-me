@@ -106,14 +106,24 @@ func (d *Discoverer) Discover(ctx context.Context, rootURL string) ([]string, er
 			attribute.Int("urls_found", len(filtered)),
 		)
 		sitemapSpan.End()
-		span.SetAttributes(attribute.String("strategy", "sitemap"))
-		d.logger.Info(ctx, "sitemap found",
+		if len(filtered) > 0 {
+			span.SetAttributes(attribute.String("strategy", "sitemap"))
+			d.logger.Info(ctx, "sitemap found",
+				ion.String("file", "discovery.go"),
+				ion.String("func", "Discover"),
+				ion.String("url", rootURL),
+				ion.String("url_count", fmt.Sprintf("%d", len(filtered))),
+			)
+			return filtered, nil
+		}
+		// Sitemap existed but all URLs were filtered (e.g. domain mismatch after
+		// www-stripping still left nothing). Fall through to BFS.
+		d.logger.Info(ctx, "sitemap found but all urls filtered: falling back to bfs",
 			ion.String("file", "discovery.go"),
 			ion.String("func", "Discover"),
 			ion.String("url", rootURL),
-			ion.String("url_count", fmt.Sprintf("%d", len(filtered))),
+			ion.String("sitemap_count", fmt.Sprintf("%d", len(urls))),
 		)
-		return filtered, nil
 	}
 	sitemapSpan.SetAttributes(attribute.Int("urls_found", 0))
 	sitemapSpan.End()

@@ -175,9 +175,11 @@ func main() {
 		authed.GET("/crawl/:id", crawlHandler.GetStatus)
 		authed.GET("/crawls", crawlHandler.ListCrawls)
 
-		// MCP endpoint — authenticates via mcp_api_key (bcrypt, per session)
+		// MCP endpoints — auth via platform API key (SHA-256)
 		tools := mcp.NewTools(vs, pg, chain, queue, cfg.Server.ResolvedHost())
-		v1.POST("/mcp/:crawl_id", mcp.NewServer(tools, pg).Handle)
+		mcpServer := mcp.NewServer(tools, pg)
+		v1.POST("/mcp", mcpServer.HandleAccount)          // account-level: list_crawls, create_crawl, get_status
+		v1.POST("/mcp/:crawl_id", mcpServer.Handle)       // collection-level: search_docs, get_page, add_page
 	}
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)

@@ -62,6 +62,125 @@ func NewServer(tools *Tools, db store.DB) *Server {
 	return &Server{tools: tools, db: db, logger: logging.Get(logging.TopicMCP)}
 }
 
+// HandleAccount serves the account-level MCP endpoint (no crawl_id in path).
+// Supports: list_crawls, create_crawl, get_status — tools that don't need a specific collection.
+// This lets agents register one permanent MCP and do everything without curl.
+func (s *Server) HandleAccount(c *gin.Context) {
+	auth := c.GetHeader("Authorization")
+	key := strings.TrimPrefix(strings.TrimPrefix(auth, "Bearer "), "bearer ")
+	if key == auth {
+		key = ""
+	}
+	if key == "" {
+		key = c.GetHeader("X-API-Key")
+	}
+	if key == "" {
+		c.JSON(401, gin.H{"error": "missing api key"})
+		return
+	}
+
+	h := sha256.Sum256([]byte(key))
+	keyHash := hex.EncodeToString(h[:])
+	userID, err := s.db.FindUserByKeyHash(c.Request.Context(), keyHash)
+	if err != nil || userID == "" {
+		c.JSON(401, gin.H{"error": "invalid api key"})
+		return
+	}
+
+	var req rpcRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "invalid json-rpc request"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	var result any
+	var rpcErr *rpcError
+
+	switch req.Method {
+	case "initialize":
+		result = gin.H{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    gin.H{"tools": gin.H{}},
+			"serverInfo":      gin.H{"name": "mcp-me", "version": "1.0.0"},
+		}
+	case "notifications/initialized":
+		result = gin.H{}
+	case "tools/list":
+		result = gin.H{"tools": accountToolDefinitions()}
+	case "tools/call":
+		var p struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		json.Unmarshal(req.Params, &p)
+		switch p.Name {
+		case "list_crawls":
+			res, err := s.tools.ListCrawls(ctx, userID)
+			if err != nil {
+				rpcErr = &rpcError{Code: -32000, Message: err.Error()}
+			} else {
+				b, _ := json.MarshalIndent(res, "", "  ")
+				result = toolResult{Content: []toolContent{{Type: "text", Text: string(b)}}}
+			}
+		case "create_crawl":
+			var p2 struct{ URL string `json:"url"` }
+			json.Unmarshal(p.Arguments, &p2)
+			res, err := s.tools.CreateCrawl(ctx, "", p2.URL)
+			if err != nil {
+				rpcErr = &rpcError{Code: -32000, Message: err.Error()}
+			} else {
+				b, _ := json.MarshalIndent(res, "", "  ")
+				result = toolResult{Content: []toolContent{{Type: "text", Text: string(b)}}}
+			}
+		case "get_status":
+			var p2 struct{ CrawlID string `json:"crawl_id"` }
+			json.Unmarshal(p.Arguments, &p2)
+			res, err := s.tools.GetStatus(ctx, p2.CrawlID)
+			if err != nil {
+				rpcErr = &rpcError{Code: -32000, Message: err.Error()}
+			} else {
+				b, _ := json.MarshalIndent(res, "", "  ")
+				result = toolResult{Content: []toolContent{{Type: "text", Text: string(b)}}}
+			}
+		default:
+			rpcErr = &rpcError{Code: -32601, Message: "tool not found on account endpoint: " + p.Name + " — use the per-collection endpoint for search_docs, get_page, add_page"}
+		}
+	default:
+		rpcErr = &rpcError{Code: -32601, Message: "method not found"}
+	}
+
+	c.JSON(http.StatusOK, rpcResponse{JSONRPC: "2.0", Result: result, Error: rpcErr, ID: req.ID})
+}
+
+func accountToolDefinitions() []gin.H {
+	return []gin.H{
+		{
+			"name":        "list_crawls",
+			"description": "List all documentation collections indexed for your account. Call this at session start to discover available collections. Returns crawl_id, url, status, page_count, chunk_count, and mcp_endpoint for each.",
+			"inputSchema": gin.H{"type": "object", "properties": gin.H{}},
+		},
+		{
+			"name":        "create_crawl",
+			"description": "Crawl a new documentation URL and create a collection. Returns crawl_id, mcp_endpoint, and status. Poll get_status until status == 'ready', then register the mcp_endpoint with 'claude mcp add' for search_docs access.",
+			"inputSchema": gin.H{
+				"type":       "object",
+				"properties": gin.H{"url": gin.H{"type": "string", "description": "Root URL of the documentation to crawl"}},
+				"required":   []string{"url"},
+			},
+		},
+		{
+			"name":        "get_status",
+			"description": "Poll the status of a crawl job. Use after create_crawl returns 'queued'. When status == 'ready', register the mcp_endpoint for search_docs.",
+			"inputSchema": gin.H{
+				"type":       "object",
+				"properties": gin.H{"crawl_id": gin.H{"type": "string", "description": "Crawl ID returned by create_crawl"}},
+				"required":   []string{"crawl_id"},
+			},
+		},
+	}
+}
+
 func (s *Server) Handle(c *gin.Context) {
 	crawlID := c.Param("crawl_id")
 

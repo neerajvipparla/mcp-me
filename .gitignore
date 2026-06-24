@@ -2,4 +2,4 @@ docs/*
 .env
 config.yaml
 .DS_Store
-server
+server.mcpme/
