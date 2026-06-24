@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth"
+import { PostgresDialect } from "kysely"
 import { Pool } from "pg"
 
 // VERCEL_URL is auto-injected by Vercel on every build (no https://)
@@ -8,7 +9,11 @@ const baseURL =
 
 export const auth = betterAuth({
   baseURL,
-  database: new Pool({ connectionString: process.env.DATABASE_URL }),
+  database: {
+    dialect: new PostgresDialect({
+      pool: new Pool({ connectionString: process.env.DATABASE_URL }),
+    }),
+  },
   socialProviders: {
     github: {
       clientId: process.env.GITHUB_CLIENT_ID!,
@@ -18,9 +23,4 @@ export const auth = betterAuth({
   trustedOrigins: [
     process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
   ],
-  user: {
-    additionalFields: {
-      githubUsername: { type: "string", required: false },
-    },
-  },
 })
