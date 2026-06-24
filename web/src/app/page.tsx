@@ -45,7 +45,7 @@ function Nav() {
       }`}
     >
       <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
-        <span className="font-serif italic text-xl text-tx">DocsMCP</span>
+        <span className="font-serif italic text-xl text-tx">mcp-me</span>
         <div className="flex items-center gap-6">
           <a href="#how" className="text-sm text-tx-muted hover:text-tx transition-colors">
             How it works
@@ -250,7 +250,7 @@ function HowItWorks() {
     {
       icon: "⤵",
       title: "Submit any docs URL",
-      body: "Paste the root URL of any public documentation site. DocsMCP discovers every page via sitemap.xml or BFS crawl, bounded to the same domain.",
+      body: "Paste the root URL of any public documentation site. mcp-me discovers every page via sitemap.xml or BFS crawl, bounded to the same domain.",
       detail: "Handles Hugo, MkDocs, Docusaurus, VitePress, Next.js — static and JS-rendered.",
     },
     {
@@ -446,7 +446,7 @@ function Footer() {
   return (
     <footer className="border-t border-border py-8 px-6">
       <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-        <span className="font-serif italic text-lg text-tx-muted">DocsMCP</span>
+        <span className="font-serif italic text-lg text-tx-muted">mcp-me</span>
         <div className="flex items-center gap-6 text-xs text-tx-muted">
           <a href="https://mcp-me-production.up.railway.app/health" target="_blank" rel="noreferrer" className="hover:text-tx transition-colors">
             API status
@@ -483,7 +483,7 @@ export default function HomePage() {
           </h1>
 
           <p className="text-tx-muted text-lg md:text-xl mb-12 max-w-xl mx-auto leading-relaxed">
-            Paste a documentation URL. DocsMCP crawls it, embeds it,
+            Paste a documentation URL. mcp-me crawls it, embeds it,
             and hands Claude a private search endpoint. Real answers. Cited sources.
           </p>
 

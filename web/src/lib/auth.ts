@@ -1,7 +1,13 @@
 import { betterAuth } from "better-auth"
 import { Pool } from "pg"
 
+// VERCEL_URL is auto-injected by Vercel on every build (no https://)
+const baseURL =
+  process.env.BETTER_AUTH_URL ??
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000")
+
 export const auth = betterAuth({
+  baseURL,
   database: {
     db: new Pool({ connectionString: process.env.DATABASE_URL }),
     type: "pg",
