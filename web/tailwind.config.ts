@@ -31,6 +31,8 @@ const config: Config = {
       backgroundImage: {
         "grid-faint":
           "linear-gradient(rgba(93,78,250,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(93,78,250,0.04) 1px, transparent 1px)",
+        "grid-neutral":
+          "linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)",
         "accent-radial":
           "radial-gradient(ellipse 60% 40% at 50% 0%, rgba(93,78,250,0.15) 0%, transparent 70%)",
       },

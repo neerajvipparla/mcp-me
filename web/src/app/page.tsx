@@ -20,14 +20,6 @@ const STAGE_DURATIONS: Record<string, number> = {
   embedding: 2000,
 }
 
-/* ── Indexed docs for the marquee ── */
-const INDEXED_DOCS = [
-  "Pydantic", "FastAPI", "Astro", "ClickHouse", "Drizzle ORM",
-  "Tailwind CSS", "Qdrant", "Asynq", "pgx", "Gin", "chromedp",
-  "Better Auth", "Prisma", "tRPC", "Zod", "Next.js", "Hono",
-  "Bun", "Elysia", "Vite", "Vitest", "shadcn/ui", "Radix UI",
-]
-
 /* ── Terminal demo lines ── */
 const TERMINAL_LINES = [
   { delay: 0,    type: "user",    text: "how do I batch insert in ClickHouse with Go?" },
@@ -252,22 +244,6 @@ function PipelineDemo() {
   )
 }
 
-/* ── Marquee ── */
-function Marquee() {
-  const items = [...INDEXED_DOCS, ...INDEXED_DOCS]
-  return (
-    <div className="overflow-hidden py-6 border-y border-border">
-      <div className="marquee-track">
-        {items.map((name, i) => (
-          <span key={i} className="mx-5 text-sm text-tx-muted whitespace-nowrap font-mono">
-            {name}
-          </span>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 /* ── How it works ── */
 function HowItWorks() {
   const steps = [
@@ -488,16 +464,11 @@ function Footer() {
 /* ── Page ── */
 export default function HomePage() {
   return (
-    <div className="bg-bg min-h-screen">
+    <div className="bg-bg min-h-screen bg-grid-neutral bg-grid">
       <Nav />
 
       {/* Hero */}
       <section className="relative pt-40 pb-16 px-6 overflow-hidden">
-        {/* Background grid */}
-        <div
-          className="absolute inset-0 bg-grid-faint bg-grid opacity-60 pointer-events-none"
-          style={{ maskImage: "radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%)" }}
-        />
         <div className="absolute inset-0 bg-accent-radial pointer-events-none" />
 
         <div className="relative max-w-5xl mx-auto text-center">
@@ -524,7 +495,6 @@ export default function HomePage() {
         </div>
       </section>
 
-      <Marquee />
       <Stats />
       <HowItWorks />
       <TerminalDemo />
