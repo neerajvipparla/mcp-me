@@ -8,10 +8,7 @@ const baseURL =
 
 export const auth = betterAuth({
   baseURL,
-  database: {
-    db: new Pool({ connectionString: process.env.DATABASE_URL }),
-    type: "pg",
-  },
+  database: new Pool({ connectionString: process.env.DATABASE_URL }),
   socialProviders: {
     github: {
       clientId: process.env.GITHUB_CLIENT_ID!,
