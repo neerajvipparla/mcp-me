@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 import { authClient } from "@/lib/auth-client"
 import { useState } from "react"
 
@@ -31,8 +32,9 @@ export default function LoginPage() {
 
       {/* Nav */}
       <div className="relative z-10 px-6 h-16 flex items-center">
-        <Link href="/" className="font-serif italic text-xl text-tx hover:text-accent transition-colors">
-          DocsMCP
+        <Link href="/" className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
+          <Image src="/mcpme-logo.png" alt="mcp-me" width={30} height={30} className="rounded-md" />
+          <span className="font-serif italic text-xl text-tx">mcp-me</span>
         </Link>
       </div>
 
@@ -42,9 +44,13 @@ export default function LoginPage() {
           <div className="rounded-2xl border border-border bg-surface p-8">
             {/* Logotype */}
             <div className="text-center mb-8">
-              <div className="w-12 h-12 rounded-xl bg-accent-dim border border-accent/30 flex items-center justify-center mx-auto mb-4">
-                <span className="text-2xl text-accent font-serif italic">D</span>
-              </div>
+              <Image
+                src="/mcpme-logo.png"
+                alt="mcp-me"
+                width={52}
+                height={52}
+                className="rounded-xl mx-auto mb-4"
+              />
               <h1 className="font-serif italic text-2xl text-tx mb-1">Welcome back</h1>
               <p className="text-sm text-tx-muted">Sign in to manage your doc collections</p>
             </div>
