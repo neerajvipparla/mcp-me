@@ -183,14 +183,19 @@ This file lives in the Claude global config directory so the key and collection 
 ## One-Time Setup (human does once, ever)
 
 1. Go to **https://mcp-me-two.vercel.app** → sign in with GitHub → copy API key
-2. Register the permanent account MCP:
+2. Run the install script from the repo root:
+   ```bash
+   bash install-skill.sh
+   ```
+   This installs the skill and creates `~/.claude/.mcpme/collections.json`. Open that file and paste your API key into the `api_key` field.
+3. Register the permanent account MCP:
    ```bash
    claude mcp add mcp-me \
      --transport http \
      https://mcp-me-production.up.railway.app/v1/mcp \
      --header "Authorization: Bearer <api_key>"
    ```
-3. Create `~/.claude/.mcpme/collections.json` with the api_key:
+4. Create `~/.claude/.mcpme/collections.json` with the api_key:
    ```json
    { "version": "1", "api_key": "<your_api_key>", "collections": [] }
    ```
@@ -204,6 +209,7 @@ After that: just ask about any library in any repo. The agent handles everything
 | Task | Human | Agent |
 |---|---|---|
 | Sign in, get API key | ✓ once | — |
+| Run `install-skill.sh`, fill in api_key | ✓ once | — |
 | Register `mcp-me` account MCP | ✓ once | — |
 | Create `~/.claude/.mcpme/collections.json` | ✓ once | — |
 | Ask about a library | ✓ | — |

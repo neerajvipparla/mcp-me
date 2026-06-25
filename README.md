@@ -43,42 +43,34 @@ Typical times: small sites (~50 pages) under 2 minutes; large sites (~500 pages)
 
 If the URL was already crawled by another user on the same instance, you get back the existing index instantly — no re-embedding.
 
-### 3. Add to Claude Code
-
-When the crawl is ready, the dashboard shows the exact command to run:
+### 3. Install the Claude Code skill (one time, ever)
 
 ```bash
-claude mcp add docs-<hostname> \
+bash install-skill.sh
+```
+
+This copies the `mcp-me` skill into `~/.claude/skills/` so it's available in every project.
+
+Then register the account-level MCP endpoint:
+
+```bash
+claude mcp add mcp-me \
   --transport http \
-  https://mcp-me-production.up.railway.app/v1/mcp/<crawl_id> \
+  https://mcp-me-production.up.railway.app/v1/mcp \
   --header "Authorization: Bearer <platform_api_key>"
 ```
 
-### 4. Add to Claude Desktop
+The script also creates `~/.claude/.mcpme/collections.json` — open it and fill in your `api_key`.
 
-In `~/Library/Application Support/Claude/claude_desktop_config.json`:
+### 4. Ask Claude Code about any library
 
-```json
-{
-  "mcpServers": {
-    "astro-docs": {
-      "url": "https://mcp-me-production.up.railway.app/v1/mcp/<crawl_id>",
-      "headers": {
-        "Authorization": "Bearer <platform_api_key>"
-      }
-    }
-  }
-}
-```
+In any repo, just ask:
 
-Restart Claude Desktop. The `search_docs`, `get_page`, and `add_page` tools appear automatically.
+> "How does Hono handle middleware?"
+> "Show me how to batch insert into ClickHouse with the Go client."
+> "Index the Drizzle ORM docs."
 
-### 5. Add to Cursor
-
-In Cursor Settings → MCP → Add server:
-
-- **URL**: `https://mcp-me-production.up.railway.app/v1/mcp/<crawl_id>`
-- **Header**: `Authorization: Bearer <platform_api_key>`
+Claude Code picks up the `mcp-me` skill automatically, discovers or creates the right collection, crawls the docs if needed, and answers with citations — no manual crawl IDs, no copy-pasting endpoints.
 
 ---
 
