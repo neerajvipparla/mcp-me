@@ -8,9 +8,13 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "https://mcp-me-production.up.rai
 
 // Forward the Better Auth session token to Go so it can verify directly against
 // the shared Postgres session table — no DASHBOARD_SECRET env var needed.
+// Better Auth uses the __Secure- prefix on HTTPS (production); bare name on HTTP (local dev).
 async function sessionHeader(): Promise<HeadersInit> {
   const cookieStore = await cookies()
-  const token = cookieStore.get("better-auth.session_token")?.value ?? ""
+  const token =
+    cookieStore.get("__Secure-better-auth.session_token")?.value ??
+    cookieStore.get("better-auth.session_token")?.value ??
+    ""
   return { "X-Auth-Session": token }
 }
 
