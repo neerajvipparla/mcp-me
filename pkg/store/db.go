@@ -26,6 +26,13 @@ type UserDB interface {
 	// FindUserByKeyHash looks up by SHA-256 hex of the platform API key.
 	// Returns "", nil when not found.
 	FindUserByKeyHash(ctx context.Context, keyHash string) (string, error)
+	// FindUserByEmail looks up a user ID by email address.
+	// Returns "", nil when not found.
+	FindUserByEmail(ctx context.Context, email string) (string, error)
+	// VerifyBetterAuthSession checks the Better Auth session table for a valid, non-expired token.
+	// Returns the user's email on success, "" when the token is missing or expired.
+	// Go and Next.js share the same Postgres, so Go can verify tokens directly — no shared secret needed.
+	VerifyBetterAuthSession(ctx context.Context, token string) (string, error)
 	// UpsertUserByEmail creates the user on first GitHub login.
 	// Does NOT overwrite an existing key hash — returns has_key=true if one already exists.
 	// Returns (true, nil) when an existing key hash was found (key unchanged).
@@ -51,8 +58,9 @@ type CrawlDB interface {
 	CreateCrawlPage(ctx context.Context, crawlID, url, title string, chunkCount int) error
 	// GetCrawlPages returns all indexed pages for a crawl, ordered by crawled_at.
 	GetCrawlPages(ctx context.Context, crawlID string) ([]*CrawlPage, error)
-	// ListUserCrawls returns all crawls belonging to userID, newest first.
-	ListUserCrawls(ctx context.Context, userID string) ([]CrawlRecord, error)
+	// ListUserCrawls returns a page of crawls belonging to userID, newest first.
+	// Request limit+1 rows internally; hasMore=true means there are more pages.
+	ListUserCrawls(ctx context.Context, userID string, limit, offset int) (crawls []CrawlRecord, hasMore bool, err error)
 }
 
 // DB composes both interfaces. PostgresStore implements this.

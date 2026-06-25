@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -217,7 +218,20 @@ func (h *CrawlHandler) ListCrawls(c *gin.Context) {
 	ctx := c.Request.Context()
 	userID := c.GetString("user_id")
 
-	crawls, err := h.db.ListUserCrawls(ctx, userID)
+	const defaultLimit = 10
+	const maxLimit = 50
+
+	page := 1
+	limit := defaultLimit
+	if p, err := strconv.Atoi(c.Query("page")); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 && l <= maxLimit {
+		limit = l
+	}
+	offset := (page - 1) * limit
+
+	crawls, hasMore, err := h.db.ListUserCrawls(ctx, userID, limit, offset)
 	if err != nil {
 		logger.Error(ctx, "db error", err,
 			ion.String("file", "crawl.go"),
@@ -244,7 +258,12 @@ func (h *CrawlHandler) ListCrawls(c *gin.Context) {
 			"mcp_endpoint": fmt.Sprintf("%s/v1/mcp/%s", h.host, cr.ID),
 		}
 	}
-	c.JSON(200, result)
+	c.JSON(200, gin.H{
+		"crawls":   result,
+		"page":     page,
+		"limit":    limit,
+		"has_more": hasMore,
+	})
 }
 
 func (h *CrawlHandler) GetPages(c *gin.Context) {

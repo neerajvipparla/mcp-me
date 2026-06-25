@@ -221,7 +221,7 @@ func (t *Tools) ListCrawls(ctx context.Context, userID string) ([]ListCrawlEntry
 	defer span.End()
 	span.SetAttributes(attribute.String("user_id", userID))
 
-	crawls, err := t.db.ListUserCrawls(ctx, userID)
+	crawls, _, err := t.db.ListUserCrawls(ctx, userID, 10, 0)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(ion.StatusError, err.Error())

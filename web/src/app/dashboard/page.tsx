@@ -54,9 +54,10 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
   )
 }
 
-function CollectionCard({ col, apiKey, onPoll }: { col: Collection; apiKey: string; onPoll: () => void }) {
+function CollectionCard({ col, apiKey, onPoll }: { col: Collection; apiKey: string; onPoll: () => void | Promise<void> }) {
   const isActive = ["queued", "crawling", "chunking", "embedding"].includes(col.status)
-  const endpointCmd = `claude mcp add docs-${new URL(col.url).hostname.replace(/\./g, "-")} --transport http ${col.mcp_endpoint} --header "Authorization: Bearer ${apiKey}"`
+  const keyDisplay = apiKey || "<your-api-key>"
+  const endpointCmd = `claude mcp add docs-${new URL(col.url).hostname.replace(/\./g, "-")} --transport http ${col.mcp_endpoint} --header "Authorization: Bearer ${keyDisplay}"`
 
   // Poll while active
   useEffect(() => {
@@ -119,13 +120,7 @@ function CollectionCard({ col, apiKey, onPoll }: { col: Collection; apiKey: stri
   )
 }
 
-function AddCollectionForm({
-  apiKey,
-  onSuccess,
-}: {
-  apiKey: string
-  onSuccess: (col: Collection) => void
-}) {
+function AddCollectionForm({ onSuccess }: { onSuccess: (col: Collection) => void }) {
   const [url, setUrl] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -136,9 +131,9 @@ function AddCollectionForm({
     setLoading(true)
     setError("")
     try {
-      const res = await fetch(`${API}/v1/crawl`, {
+      const res = await fetch("/api/collections", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url }),
       })
       const data = await res.json()
@@ -189,6 +184,8 @@ function AddCollectionForm({
   )
 }
 
+const PAGE_LIMIT = 10
+
 export default function DashboardPage() {
   const router = useRouter()
   const [session, setSession] = useState<{ user: { email: string; name: string } } | null>(null)
@@ -197,9 +194,13 @@ export default function DashboardPage() {
   const [keyExistsButHidden, setKeyExistsButHidden] = useState(false)
   const [collections, setCollections] = useState<Collection[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [page, setPage] = useState(1)
   const fetchedKey = useRef(false)
 
-  // Auth check + trigger API key fetch
+  // Auth check: load both the API key (for display) and collections (via session proxy).
+  // Collections load immediately — they don't depend on the API key being present.
   useEffect(() => {
     authClient.getSession().then(({ data }) => {
       if (!data?.session) {
@@ -208,6 +209,7 @@ export default function DashboardPage() {
       }
       setSession(data as any)
       fetchApiKey()
+      loadPage(1, false)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router])
@@ -227,22 +229,40 @@ export default function DashboardPage() {
     }
   }, [])
 
-  // Load collections
-  const loadCollections = useCallback(async (key: string) => {
-    if (!key) return
+  // loadPage fetches one page. append=false replaces the list (initial load or poll refresh).
+  // append=true adds to the bottom (Load more button).
+  const loadPage = useCallback(async (p: number, append: boolean) => {
     try {
-      const res = await fetch(`${API}/v1/crawls`, {
-        headers: { "X-API-Key": key },
-      })
+      const res = await fetch(`/api/collections?page=${p}&limit=${PAGE_LIMIT}`)
       const data = await res.json()
-      if (Array.isArray(data)) setCollections(data)
+      const items: Collection[] = Array.isArray(data.crawls) ? data.crawls : []
+      setHasMore(!!data.has_more)
+      setPage(p)
+      setCollections(prev => append ? [...prev, ...items] : items)
     } catch { /* silent */ }
-    finally { setLoading(false) }
+    finally {
+      setLoading(false)
+      setLoadingMore(false)
+    }
   }, [])
 
-  useEffect(() => {
-    if (apiKey) loadCollections(apiKey)
-  }, [apiKey, loadCollections])
+  // Poll refresh: reload page 1 and merge updated statuses into the existing list.
+  const refreshStatuses = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/collections?page=1&limit=${PAGE_LIMIT}`)
+      const data = await res.json()
+      const fresh: Collection[] = Array.isArray(data.crawls) ? data.crawls : []
+      setCollections(prev => prev.map(col => {
+        const updated = fresh.find(f => f.crawl_id === col.crawl_id)
+        return updated ?? col
+      }))
+    } catch { /* silent */ }
+  }, [])
+
+  const loadMore = () => {
+    setLoadingMore(true)
+    loadPage(page + 1, true)
+  }
 
   const handleNewCollection = (col: Collection) => {
     setCollections(prev => [col, ...prev])
@@ -321,12 +341,12 @@ export default function DashboardPage() {
         {/* Collections */}
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-lg font-semibold text-tx">Collections</h2>
-          <span className="text-xs text-tx-muted font-mono">{collections.length} indexed</span>
+          <span className="text-xs text-tx-muted font-mono">{collections.length} loaded</span>
         </div>
 
         <div className="space-y-4">
-          {apiKey && (
-            <AddCollectionForm apiKey={apiKey} onSuccess={handleNewCollection} />
+          {session && (
+            <AddCollectionForm onSuccess={handleNewCollection} />
           )}
 
           {loading ? (
@@ -346,9 +366,23 @@ export default function DashboardPage() {
                 key={col.crawl_id}
                 col={col}
                 apiKey={apiKey}
-                onPoll={() => loadCollections(apiKey)}
+                onPoll={refreshStatuses}
               />
             ))
+          )}
+
+          {hasMore && (
+            <button
+              onClick={loadMore}
+              disabled={loadingMore}
+              className="w-full py-3 rounded-xl border border-border text-sm text-tx-muted hover:text-tx hover:border-accent/40 transition-all duration-200 disabled:opacity-40"
+            >
+              {loadingMore ? (
+                <span className="w-4 h-4 border-2 border-tx-muted/30 border-t-tx-muted rounded-full animate-spin inline-block" />
+              ) : (
+                "Load more"
+              )}
+            </button>
           )}
         </div>
 

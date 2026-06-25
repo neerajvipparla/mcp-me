@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import Image from "next/image"
 import Link from "next/link"
+import { authClient } from "@/lib/auth-client"
 
 /* ── Pipeline stage types ── */
 type Stage = "idle" | "crawling" | "chunking" | "embedding" | "ready"
@@ -33,9 +34,12 @@ const TERMINAL_LINES = [
 /* ── Nav ── */
 function Nav() {
   const [scrolled, setScrolled] = useState(false)
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
+
   useEffect(() => {
     const h = () => setScrolled(window.scrollY > 20)
     window.addEventListener("scroll", h, { passive: true })
+    authClient.getSession().then(({ data }) => setIsLoggedIn(!!data?.session))
     return () => window.removeEventListener("scroll", h)
   }, [])
 
@@ -54,12 +58,21 @@ function Nav() {
           <a href="#how" className="text-sm text-tx-muted hover:text-tx transition-colors">
             How it works
           </a>
-          <Link
-            href="/login"
-            className="text-sm px-4 py-2 rounded-md border border-accent text-accent hover:bg-accent hover:text-white transition-all duration-200"
-          >
-            Sign in
-          </Link>
+          {isLoggedIn ? (
+            <Link
+              href="/dashboard"
+              className="text-sm px-4 py-2 rounded-md border border-accent text-accent hover:bg-accent hover:text-white transition-all duration-200"
+            >
+              Dashboard →
+            </Link>
+          ) : (
+            <Link
+              href="/login"
+              className="text-sm px-4 py-2 rounded-md border border-accent text-accent hover:bg-accent hover:text-white transition-all duration-200"
+            >
+              Sign in
+            </Link>
+          )}
         </div>
       </div>
     </nav>

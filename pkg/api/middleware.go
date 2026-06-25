@@ -30,14 +30,43 @@ import (
 // logger is the shared structured logger for the api package.
 var logger *ion.Ion = logging.Get(logging.TopicAPI)
 
-// PlatformKeyAuth verifies the platform API key on every protected route.
-// Accepts X-API-Key header or Authorization: Bearer <key>.
+// PlatformKeyAuth verifies the caller's identity on every protected route.
+// Accepts two auth modes:
+//  1. X-Auth-Session: <token>              — Better Auth session token forwarded by Next.js server routes.
+//     Go verifies the token directly against the shared Postgres (same DATABASE_URL) — no shared secret needed.
+//  2. X-API-Key or Authorization: Bearer   — platform API key for MCP, CLI, and direct API use.
+//
 // Sets "user_id" in the Gin context on success.
 func PlatformKeyAuth(db store.UserDB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx := c.Request.Context()
+
+		// Better Auth session token: Next.js server routes forward the cookie value here.
+		// Go queries the shared Postgres session table — no DASHBOARD_SECRET env var needed.
+		if token := c.GetHeader("X-Auth-Session"); token != "" {
+			email, err := db.VerifyBetterAuthSession(ctx, token)
+			if err == nil && email != "" {
+				userID, err := db.FindUserByEmail(ctx, email)
+				if err == nil && userID != "" {
+					c.Set("user_id", userID)
+					c.Next()
+					return
+				}
+			}
+			// Token present but invalid/expired — reject immediately, don't fall through.
+			logger.Warn(ctx, "auth failed: invalid session token",
+				ion.String("file", "middleware.go"),
+				ion.String("func", "PlatformKeyAuth"),
+				ion.String("path", c.FullPath()),
+			)
+			c.AbortWithStatusJSON(401, gin.H{"error": "invalid or expired session"})
+			return
+		}
+
+		// Platform API key auth (MCP, CLI, direct API use).
 		key := extractAPIKey(c)
 		if key == "" {
-			logger.Warn(c.Request.Context(), "auth failed: missing api key",
+			logger.Warn(ctx, "auth failed: missing api key",
 				ion.String("file", "middleware.go"),
 				ion.String("func", "PlatformKeyAuth"),
 				ion.String("path", c.FullPath()),
@@ -45,9 +74,9 @@ func PlatformKeyAuth(db store.UserDB) gin.HandlerFunc {
 			c.AbortWithStatusJSON(401, gin.H{"error": "missing api key"})
 			return
 		}
-		userID, err := db.FindUserByKeyHash(c.Request.Context(), hashAPIKey(key))
+		userID, err := db.FindUserByKeyHash(ctx, hashAPIKey(key))
 		if err != nil || userID == "" {
-			logger.Warn(c.Request.Context(), "auth failed: invalid api key",
+			logger.Warn(ctx, "auth failed: invalid api key",
 				ion.String("file", "middleware.go"),
 				ion.String("func", "PlatformKeyAuth"),
 				ion.String("path", c.FullPath()),

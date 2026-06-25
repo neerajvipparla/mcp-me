@@ -117,6 +117,34 @@ func (s *PostgresStore) RotateUserKey(ctx context.Context, email, keyHash string
 	return err
 }
 
+func (s *PostgresStore) FindUserByEmail(ctx context.Context, email string) (string, error) {
+	var id string
+	err := s.pool.QueryRow(ctx,
+		`SELECT id FROM users WHERE email = $1`, email,
+	).Scan(&id)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+// VerifyBetterAuthSession queries the Better Auth session + user tables (same Postgres, shared DB).
+// Both services use DATABASE_URL — no shared secret is needed; the token itself is the proof.
+func (s *PostgresStore) VerifyBetterAuthSession(ctx context.Context, token string) (string, error) {
+	var email string
+	err := s.pool.QueryRow(ctx,
+		`SELECT u.email
+		 FROM "session" s
+		 JOIN "user" u ON u.id = s."userId"
+		 WHERE s.token = $1 AND s."expiresAt" > now()`,
+		token,
+	).Scan(&email)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	return email, err
+}
+
 // FindUserByKeyHash looks up a user by SHA-256 hex of their platform API key.
 // Returns "", nil when not found — callers treat empty string as unauthenticated.
 func (s *PostgresStore) FindUserByKeyHash(ctx context.Context, keyHash string) (string, error) {
@@ -258,18 +286,18 @@ func (s *PostgresStore) FindCrawlByPageURL(ctx context.Context, url string) (*Cr
 	return &r, nil
 }
 
-func (s *PostgresStore) ListUserCrawls(ctx context.Context, userID string) ([]CrawlRecord, error) {
+func (s *PostgresStore) ListUserCrawls(ctx context.Context, userID string, limit, offset int) ([]CrawlRecord, bool, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, url_raw, url_normalized, url_hash, status, embedder_id,
 		        page_count, chunk_count, qdrant_collection, last_modified, created_at, ready_at
 		 FROM crawls
 		 WHERE id IN (SELECT DISTINCT crawl_id FROM user_crawls WHERE user_id = $1)
 		 ORDER BY created_at DESC
-		 LIMIT 50`,
-		userID,
+		 LIMIT $2 OFFSET $3`,
+		userID, limit+1, offset,
 	)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 	var out []CrawlRecord
@@ -278,11 +306,18 @@ func (s *PostgresStore) ListUserCrawls(ctx context.Context, userID string) ([]Cr
 		if err := rows.Scan(&r.ID, &r.URLRaw, &r.URLNormalized, &r.URLHash, &r.Status,
 			&r.EmbedderID, &r.PageCount, &r.ChunkCount, &r.QdrantCollection,
 			&r.LastModified, &r.CreatedAt, &r.ReadyAt); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	return out, hasMore, nil
 }
 
 func (s *PostgresStore) GetUserCrawlByCrawlID(ctx context.Context, crawlID string) (*UserCrawlRecord, error) {
