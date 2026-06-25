@@ -2,12 +2,13 @@
 // PURPOSE: Fetches and parses sitemap.xml (regular or sitemap index) for a
 //          documentation root URL. Tries multiple candidate paths narrowest-first
 //          so section-scoped sitemaps (e.g. /docs/sitemap.xml) are preferred over
-//          the root sitemap. Returns nil,nil when no usable sitemap is found so
-//          Discoverer can fall back to BFS.
+//          the root sitemap. Also checks robots.txt for declared Sitemap: URLs.
+//          Returns nil,nil when no usable sitemap is found so Discoverer can fall
+//          back to BFS.
 //
 // CORE DATA STRUCTURES:
 //   - sitemapIndex / urlset: XML decode targets; allocated per fetch, not retained.
-//   - sitemapCandidates ([]string): O(path-depth) length; built once per Discover call.
+//   - sitemapCandidates ([]string): O(path-depth) length; built once per call.
 //   - sitemapClient (package-level): shared *http.Client with 15s timeout.
 //
 // TO MODIFY BEHAVIOR:
@@ -18,9 +19,6 @@
 // DO NOT:
 //   - Store per-request state at package level (sitemapClient is stateless).
 //   - Return an error for a 404 — treat it as "no sitemap" (already the case).
-//
-// EXTENSION POINT: add robots.txt Sitemap: header discovery as a new candidate
-//                  source in sitemapCandidates without changing parseSitemap.
 package discovery
 
 import (
@@ -52,18 +50,14 @@ type urlset struct {
 
 // FetchSitemap discovers URLs from sitemap.xml.
 //
-// Lookup walks up the URL path, returning the first sitemap that yields URLs:
-//  1. <rootURL>/sitemap.xml
-//  2. <scheme>://<host>/<each-parent-path>/sitemap.xml (narrowest first)
-//  3. <scheme>://<host>/sitemap.xml
-//
-// This handles sites that section their sitemaps by app (e.g. ClickHouse where
-// the marketing site's /sitemap.xml has no docs URLs but /docs/sitemap.xml has
-// thousands). Narrower matches win because they're more topical to the rootURL.
+// Lookup order:
+//  1. Path-based candidates narrowest-first (e.g. /docs/sitemap.xml before /sitemap.xml)
+//  2. Sitemap URLs declared in /robots.txt Sitemap: headers
 //
 // Returns nil, nil if no candidate yields URLs (caller falls back to BFS).
-// Handles sitemap index files transparently.
+// Handles sitemap index files transparently, including recursively nested indexes.
 func FetchSitemap(ctx context.Context, rootURL string) ([]string, error) {
+	// Path-based candidates (narrowest first)
 	for _, target := range sitemapCandidates(rootURL) {
 		urls, err := fetchSitemapAt(ctx, target)
 		if err != nil {
@@ -73,7 +67,60 @@ func FetchSitemap(ctx context.Context, rootURL string) ([]string, error) {
 			return urls, nil
 		}
 	}
+
+	// robots.txt Sitemap: header fallback
+	for _, target := range robotsSitemapURLs(ctx, rootURL) {
+		urls, err := fetchSitemapAt(ctx, target)
+		if err != nil {
+			continue
+		}
+		if len(urls) > 0 {
+			return urls, nil
+		}
+	}
+
 	return nil, nil
+}
+
+// robotsSitemapURLs fetches /robots.txt and returns all URLs from Sitemap: lines.
+// Returns nil if robots.txt is missing, unreachable, or has no Sitemap: lines.
+func robotsSitemapURLs(ctx context.Context, rootURL string) []string {
+	u, err := url.Parse(rootURL)
+	if err != nil || u.Host == "" {
+		return nil
+	}
+
+	robotsURL := u.Scheme + "://" + u.Host + "/robots.txt"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, robotsURL, nil)
+	if err != nil {
+		return nil
+	}
+
+	resp, err := sitemapClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return nil
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	var sitemaps []string
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(line), "sitemap:") {
+			raw := strings.TrimSpace(line[len("sitemap:"):])
+			if raw != "" {
+				sitemaps = append(sitemaps, raw)
+			}
+		}
+	}
+	return sitemaps
 }
 
 // sitemapCandidates returns sitemap URLs to try, narrowest first, deduped.
@@ -136,6 +183,8 @@ func fetchSitemapAt(ctx context.Context, target string) ([]string, error) {
 	return parseSitemap(ctx, body)
 }
 
+// parseSitemap handles both <sitemapindex> and <urlset> XML.
+// Sitemapindex entries are fetched recursively — nested indexes work at any depth.
 func parseSitemap(ctx context.Context, data []byte) ([]string, error) {
 	var idx sitemapIndex
 	if xml.Unmarshal(data, &idx) == nil && len(idx.Sitemaps) > 0 {
@@ -164,8 +213,8 @@ func parseSitemap(ctx context.Context, data []byte) ([]string, error) {
 	return urls, nil
 }
 
-func fetchChildSitemap(ctx context.Context, url string) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func fetchChildSitemap(ctx context.Context, sitemapURL string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sitemapURL, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -247,6 +247,37 @@ func (h *CrawlHandler) ListCrawls(c *gin.Context) {
 	c.JSON(200, result)
 }
 
+func (h *CrawlHandler) GetPages(c *gin.Context) {
+	ctx := c.Request.Context()
+	id := c.Param("id")
+
+	pages, err := h.db.GetCrawlPages(ctx, id)
+	if err != nil {
+		logger.Error(ctx, "db error", err,
+			ion.String("file", "crawl.go"),
+			ion.String("func", "GetPages"),
+			ion.String("crawl_id", id),
+		)
+		c.JSON(500, gin.H{"error": "db error"})
+		return
+	}
+
+	result := make([]gin.H, len(pages))
+	for i, pg := range pages {
+		result[i] = gin.H{
+			"url":         pg.URL,
+			"title":       pg.Title,
+			"chunk_count": pg.ChunkCount,
+			"crawled_at":  pg.CrawledAt.UTC().Format("2006-01-02T15:04:05Z"),
+		}
+	}
+	c.JSON(200, gin.H{
+		"crawl_id": id,
+		"count":    len(result),
+		"pages":    result,
+	})
+}
+
 func (h *CrawlHandler) GetStatus(c *gin.Context) {
 	ctx := c.Request.Context()
 	id := c.Param("id")

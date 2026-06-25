@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -127,9 +128,56 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		ion.String("url_count", fmt.Sprintf("%d", len(urls))),
 	)
 
+	// Fetch phase — either via our pool (normal path) or Firecrawl bulk crawl (fallback).
+	// Firecrawl is used when sitemap+BFS returned 0 URLs and the key is configured.
+	// It returns pages with markdown already attached, so we skip our fetch pool entirely.
+	var results []crawlertypes.PageResult
+
 	_, fetchSpan := tracer.Start(ctx, "pipeline.fetch_pool")
-	pool := crawlertypes.NewCrawlPool(h.chain, 5)
-	results := pool.FetchAll(ctx, urls)
+
+	if len(urls) == 0 {
+		firecrawlKey := os.Getenv("FIRECRAWL_URL")
+		if firecrawlKey != "" {
+			h.logger.Info(ctx, "discovery returned 0 pages: trying firecrawl bulk crawl",
+				ion.String("file", "pipeline.go"),
+				ion.String("func", "ProcessTask"),
+				ion.String("crawl_id", p.CrawlID),
+				ion.String("url", p.URL),
+			)
+			fcResults, fcErr := discovery.FirecrawlBulkCrawl(ctx, p.URL, firecrawlKey, "")
+			if fcErr != nil {
+				h.logger.Warn(ctx, "firecrawl bulk crawl failed",
+					ion.String("file", "pipeline.go"),
+					ion.String("func", "ProcessTask"),
+					ion.String("crawl_id", p.CrawlID),
+					ion.String("error", fcErr.Error()),
+				)
+			} else {
+				results = fcResults
+			}
+		}
+		if len(results) == 0 {
+			fetchSpan.SetAttributes(attribute.Int("total", 0))
+			fetchSpan.End()
+			if dbErr := h.db.UpdateCrawlStatus(ctx, p.CrawlID, "failed"); dbErr != nil {
+				h.logger.Error(ctx, "failed to mark crawl as failed", dbErr,
+					ion.String("file", "pipeline.go"),
+					ion.String("func", "ProcessTask"),
+					ion.String("crawl_id", p.CrawlID),
+				)
+			}
+			h.logger.Warn(ctx, "no pages discovered: marking crawl failed",
+				ion.String("file", "pipeline.go"),
+				ion.String("func", "ProcessTask"),
+				ion.String("crawl_id", p.CrawlID),
+				ion.String("url", p.URL),
+			)
+			return fmt.Errorf("no pages discovered for %s", p.URL)
+		}
+	} else {
+		pool := crawlertypes.NewCrawlPool(h.chain, 5)
+		results = pool.FetchAll(ctx, urls)
+	}
 
 	if err := h.db.UpdateCrawlStatus(ctx, p.CrawlID, "chunking"); err != nil {
 		h.logger.Error(ctx, "failed to update status: chunking", err,
@@ -234,6 +282,18 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		ion.String("skipped", fmt.Sprintf("%d", skipped)),
 		ion.String("chunks", fmt.Sprintf("%d", len(allTexts))),
 	)
+
+	// Guard: if every page failed to parse/chunk, mark failed instead of writing empty "ready".
+	if totalPages == 0 {
+		if dbErr := h.db.UpdateCrawlStatus(ctx, p.CrawlID, "failed"); dbErr != nil {
+			h.logger.Error(ctx, "failed to mark crawl as failed", dbErr,
+				ion.String("file", "pipeline.go"),
+				ion.String("func", "ProcessTask"),
+				ion.String("crawl_id", p.CrawlID),
+			)
+		}
+		return fmt.Errorf("no pages indexed for %s (fetched %d, all failed)", p.URL, len(results))
+	}
 
 	if err := h.db.UpdateCrawlStatus(ctx, p.CrawlID, "embedding"); err != nil {
 		h.logger.Error(ctx, "failed to update status: embedding", err,
