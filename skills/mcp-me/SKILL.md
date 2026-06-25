@@ -18,16 +18,18 @@ mcp-me crawls documentation websites, embeds them into a vector store, and expos
 | `POST /v1/mcp` | `mcp-me` (permanent, one-time setup) | `list_crawls`, `create_crawl`, `get_status` |
 | `POST /v1/mcp/<crawl_id>` | `mcp-me-<id>` (per collection) | `search_docs`, `get_page`, `add_page` |
 
-The account endpoint (`mcp-me`) is registered once and never changes. Collection endpoints are registered automatically when a new crawl is ready.
+The account endpoint (`mcp-me`) is registered once globally and never changes. Collection endpoints are registered automatically when a new crawl is ready.
 
 ---
 
 ## Step 0 — Resolve the API Key
 
+The config file lives at the **global** Claude level so the same key and collections are available in every repo, not just the current one.
+
 Check in this order:
-1. `.mcpme/collections.json` → `api_key` field
+1. `~/.claude/.mcpme/collections.json` → `api_key` field
 2. `CLAUDE.md` → any `Authorization: Bearer <key>` line
-3. If not found → ask the human **once**: "What's your mcp-me API key?" Write it to `.mcpme/collections.json` immediately.
+3. If not found → ask the human **once**: "What's your mcp-me API key?" Write it to `~/.claude/.mcpme/collections.json` immediately.
 
 ---
 
@@ -41,12 +43,12 @@ mcp-me: list_crawls()
 
 Returns all collections: `crawl_id`, `url`, `status`, `page_count`, `chunk_count`, `mcp_endpoint`.
 
-Merge with `.mcpme/collections.json` silently:
+Merge with `~/.claude/.mcpme/collections.json` silently:
 - Server + local match → update `status`, counts, `mcp_endpoint`. Keep local `description`.
 - Server only → add entry, infer `description` from URL.
 - Local only → mark `status: "failed"`, exclude from matching.
 
-Write merged state back to `.mcpme/collections.json`.
+Write merged state back to `~/.claude/.mcpme/collections.json`.
 
 ---
 
@@ -80,7 +82,7 @@ mcp-me: create_crawl(url="https://docs.example.com")
 
 Response: `{ "crawl_id": "...", "mcp_endpoint": "...", "status": "queued" | "ready" }`
 
-Write to `.mcpme/collections.json` immediately:
+Write to `~/.claude/.mcpme/collections.json` immediately:
 ```json
 {
   "version": "1",
@@ -109,7 +111,7 @@ mcp-me: get_status(crawl_id="<uuid>")
 Poll every 15s. States: `queued → crawling → chunking → embedding → ready → failed`.
 
 Once `ready`:
-1. Update `.mcpme/collections.json`
+1. Update `~/.claude/.mcpme/collections.json`
 2. Register the collection MCP:
    ```
    claude mcp add mcp-me-<id> --transport http <mcp_endpoint> --header "Authorization: Bearer <api_key>"
@@ -151,11 +153,13 @@ mcp-me-<id>: search_docs(query="<user query>", top_k=5)
 - Cite every claim: "According to [title](<source_url>)..."
 - Synthesize chunks — don't dump raw results
 - State when using docs vs training knowledge
-- Update `description` in `.mcpme/collections.json` with keywords learned from results
+- Update `description` in `~/.claude/.mcpme/collections.json` with keywords learned from results
 
 ---
 
-## `.mcpme/collections.json` Schema
+## `~/.claude/.mcpme/collections.json` Schema
+
+This file lives in the Claude global config directory so the key and collection list are available in every project, not just the current repo.
 
 ```json
 {
@@ -174,8 +178,6 @@ mcp-me-<id>: search_docs(query="<user query>", top_k=5)
 }
 ```
 
-Always ensure `.gitignore` contains `.mcpme/` before writing this file.
-
 ---
 
 ## One-Time Setup (human does once, ever)
@@ -188,9 +190,12 @@ Always ensure `.gitignore` contains `.mcpme/` before writing this file.
      https://mcp-me-production.up.railway.app/v1/mcp \
      --header "Authorization: Bearer <api_key>"
    ```
-3. Create `.mcpme/collections.json` with the api_key
+3. Create `~/.claude/.mcpme/collections.json` with the api_key:
+   ```json
+   { "version": "1", "api_key": "<your_api_key>", "collections": [] }
+   ```
 
-After that: just ask about any library. The agent handles everything.
+After that: just ask about any library in any repo. The agent handles everything.
 
 ---
 
@@ -200,5 +205,6 @@ After that: just ask about any library. The agent handles everything.
 |---|---|---|
 | Sign in, get API key | ✓ once | — |
 | Register `mcp-me` account MCP | ✓ once | — |
+| Create `~/.claude/.mcpme/collections.json` | ✓ once | — |
 | Ask about a library | ✓ | — |
 | Everything else | — | ✓ automatic via MCP |

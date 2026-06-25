@@ -1,22 +1,10 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
-import { headers, cookies } from "next/headers"
+import { headers } from "next/headers"
 
 export const dynamic = "force-dynamic"
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "https://mcp-me-production.up.railway.app"
-
-// Forward the Better Auth session token to Go so it can verify directly against
-// the shared Postgres session table — no DASHBOARD_SECRET env var needed.
-// Better Auth uses the __Secure- prefix on HTTPS (production); bare name on HTTP (local dev).
-async function sessionHeader(): Promise<HeadersInit> {
-  const cookieStore = await cookies()
-  const token =
-    cookieStore.get("__Secure-better-auth.session_token")?.value ??
-    cookieStore.get("better-auth.session_token")?.value ??
-    ""
-  return { "X-Auth-Session": token }
-}
 
 export async function GET(req: Request) {
   const session = await auth.api.getSession({ headers: await headers() })
@@ -24,12 +12,16 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 })
   }
 
+  // session.session.token is the exact value stored in Better Auth's session table.
+  // Go verifies it directly against the shared Postgres — no cookie parsing, no shared secret.
+  const token: string = (session as any).session?.token ?? ""
+
   const url = new URL(req.url)
   const page = url.searchParams.get("page") ?? "1"
   const limit = url.searchParams.get("limit") ?? "10"
 
   const res = await fetch(`${API}/v1/crawls?page=${page}&limit=${limit}`, {
-    headers: await sessionHeader(),
+    headers: { "X-Auth-Session": token },
     cache: "no-store",
   })
 
@@ -46,12 +38,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 })
   }
 
+  const token: string = (session as any).session?.token ?? ""
+
   const body = await req.json()
   const res = await fetch(`${API}/v1/crawl`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(await sessionHeader()),
+      "X-Auth-Session": token,
     },
     body: JSON.stringify(body),
   })

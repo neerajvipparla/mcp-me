@@ -1,20 +1,38 @@
 openapi: 3.1.0
 info:
-  title: DocsMCP API
-  description: Crawls documentation URLs, embeds them into Qdrant, and exposes MCP endpoints for AI assistants.
-  version: 1.1.0
+  title: mcp-me API
+  description: |
+    Crawls documentation URLs, embeds them into Qdrant using server-side FastEmbed,
+    and exposes private MCP endpoints for Claude and Cursor to query with hybrid semantic search.
+
+    **Authentication**
+
+    All protected endpoints accept the platform API key in either of two forms:
+    ```
+    X-API-Key: <platform_api_key>
+    Authorization: Bearer <platform_api_key>
+    ```
+
+    The platform API key is obtained by:
+    - Signing in with GitHub via the dashboard (key shown once on first login)
+    - Or via `POST /v1/register` for programmatic/CLI use
+
+    The same platform API key authenticates both REST endpoints and MCP endpoints.
+  version: 2.0.0
 
 servers:
+  - url: https://mcp-me-production.up.railway.app
+    description: Production
   - url: http://localhost:8080
     description: Local development
 
 tags:
   - name: auth
-    description: User registration
+    description: User registration and GitHub OAuth key exchange
   - name: crawl
-    description: Crawl job submission and status
+    description: Crawl job submission, status, and page listing
   - name: mcp
-    description: MCP JSON-RPC endpoint for AI tool use
+    description: MCP JSON-RPC endpoints for AI tool use
 
 paths:
   /health:
@@ -36,10 +54,14 @@ paths:
   /v1/register:
     post:
       tags: [auth]
-      summary: Register a new user
+      summary: Register with email (programmatic / CLI)
       description: |
         Creates a user account and returns a platform API key.
-        The key is shown **once** — it is never stored in plaintext and cannot be recovered.
+        Use this for programmatic or CLI access when you're not using the web dashboard.
+
+        For the standard web flow, sign in with GitHub — the dashboard handles key delivery automatically.
+
+        The `api_key` is shown **once** and cannot be recovered. Save it immediately.
       operationId: register
       requestBody:
         required: true
@@ -55,13 +77,104 @@ paths:
                   example: you@example.com
       responses:
         "200":
-          description: User created — save the api_key immediately
+          description: User created
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/RegisterResponse"
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "email already registered"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/auth/github:
+    post:
+      tags: [auth]
+      summary: GitHub OAuth key exchange
+      description: |
+        Called by the Next.js dashboard after Better Auth completes the GitHub OAuth flow.
+        Exchanges a GitHub access token for a mcp-me platform API key.
+
+        **First login**: creates the user and returns `api_key` (shown once — save it).
+
+        **Returning user**: user already has a key stored. Returns `has_key: true` with no `api_key`
+        (the key cannot be recovered — use `POST /v1/auth/github/rotate` to get a new one).
+      operationId: githubLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitHubLoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubLoginResponse"
+              examples:
+                new_user:
+                  summary: First login — key is returned
+                  value:
+                    api_key: "a3f9c2d4e5b6..."
+                    email: "you@example.com"
+                returning_user:
+                  summary: Returning user — key already stored, not returned
+                  value:
+                    has_key: true
+                    email: "you@example.com"
+        "401":
+          description: Invalid GitHub access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "invalid github token"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/auth/github/rotate:
+    post:
+      tags: [auth]
+      summary: Rotate platform API key
+      description: |
+        Generates a new platform API key, replacing the old one immediately.
+        The old key stops working as soon as this responds.
+
+        Requires the caller to re-authenticate with a valid GitHub access token —
+        no platform key is needed, since the caller may no longer have it.
+      operationId: rotateKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitHubLoginRequest"
+      responses:
+        "200":
+          description: New key generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RotateKeyResponse"
+        "401":
+          description: Invalid GitHub access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "invalid github token"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -70,13 +183,16 @@ paths:
       tags: [crawl]
       summary: Submit a crawl job
       description: |
-        Enqueues a crawl job for the given URL.
-        - **Cache hit** (URL already crawled): returns `200` with `status: ready`, a fresh `mcp_api_key`,
-          and a `claude_md` snippet ready to paste into your project's CLAUDE.md.
-        - **Cache miss**: creates a new crawl job, returns `202` with `status: queued`.
+        Enqueues a documentation crawl for the given root URL.
 
-        The `mcp_api_key` is shown **once** — save it to authenticate MCP calls.
+        **Cache hit** — URL was already crawled: returns `200` with `status: ready` and a
+        `claude_md` snippet ready to paste into your project's CLAUDE.md.
+
+        **Cache miss** — new URL: returns `202` with `status: queued`.
         Poll `GET /v1/crawl/{id}` until `status` is `ready`, then use the `mcp_endpoint`.
+
+        The `mcp_endpoint` is authenticated with your **platform API key** — the same key
+        used for all REST calls. There is no separate per-crawl MCP key.
       operationId: postCrawl
       security:
         - PlatformKeyHeader: []
@@ -92,20 +208,29 @@ paths:
                 url:
                   type: string
                   format: uri
-                  example: https://docs.pydantic.dev/latest/
+                  example: https://docs.astro.build
       responses:
         "200":
-          description: Cache hit — crawl already ready, includes `claude_md` snippet
+          description: Cache hit — crawl already ready
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CrawlResponse"
+              example:
+                crawl_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                mcp_endpoint: "https://mcp-me-production.up.railway.app/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                status: "ready"
+                claude_md: "## mcp-me -- docs.astro.build\n..."
         "202":
-          description: Accepted — crawl job enqueued, poll GET /v1/crawl/{id} for status
+          description: Accepted — crawl queued, poll GET /v1/crawl/{id} for status
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CrawlResponse"
+              example:
+                crawl_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                mcp_endpoint: "https://mcp-me-production.up.railway.app/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                status: "queued"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -116,8 +241,11 @@ paths:
   /v1/crawl/{id}:
     get:
       tags: [crawl]
-      summary: Get crawl status
-      description: Poll until `status` is `ready` or `failed`. Returns `mcp_endpoint` for convenience.
+      summary: Poll crawl status
+      description: |
+        Returns current status for a crawl job.
+        Poll until `status` is `ready` or `failed`.
+        Status transitions: `queued → crawling → chunking → embedding → ready`
       operationId: getCrawlStatus
       security:
         - PlatformKeyHeader: []
@@ -142,58 +270,174 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
-  /v1/crawls:
+  /v1/crawl/{id}/pages:
     get:
       tags: [crawl]
-      summary: List all crawls for the authenticated user
+      summary: List indexed pages for a crawl
       description: |
-        Returns up to 50 crawls belonging to the authenticated user, newest first.
-        Useful for discovering which documentation collections are available
-        before configuring an MCP session.
-      operationId: listCrawls
+        Returns all pages that were successfully crawled and indexed for a given crawl ID,
+        ordered by the time they were crawled. Useful for auditing coverage.
+      operationId: getCrawlPages
       security:
         - PlatformKeyHeader: []
         - PlatformKeyBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
       responses:
         "200":
-          description: Array of crawl records (may be empty)
+          description: Indexed pages
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/CrawlListEntry"
+                $ref: "#/components/schemas/CrawlPagesResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /v1/mcp/{crawl_id}:
+  /v1/crawls:
+    get:
+      tags: [crawl]
+      summary: List crawls for the authenticated user (paginated)
+      description: |
+        Returns a page of crawls belonging to the authenticated user, newest first.
+        Default page size is 10; maximum is 50.
+
+        Use `has_more: true` to know when to show a "Load more" control.
+      operationId: listCrawls
+      security:
+        - PlatformKeyHeader: []
+        - PlatformKeyBearer: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          example: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+          example: 10
+      responses:
+        "200":
+          description: Paginated list of crawls (may be empty)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedCrawlsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/mcp:
     post:
       tags: [mcp]
-      summary: MCP JSON-RPC endpoint
+      summary: Account-level MCP endpoint
       description: |
-        JSON-RPC 2.0 endpoint. Authenticate with the `mcp_api_key` returned by `POST /v1/crawl`.
-
-        Supports two calling styles:
-        - **MCP protocol** (`tools/call`): wraps results in `{content:[{type:"text",text:"..."}]}` — used by Claude Code and Cursor.
-        - **Legacy direct methods**: call the method name directly for simpler curl testing.
+        JSON-RPC 2.0 endpoint for account-scoped operations that don't require a specific collection.
+        Authenticate with your **platform API key**.
 
         **Available tools:**
         | Tool | Description |
         |------|-------------|
-        | `search_docs` | Hybrid semantic search (dense + sparse RRF) over crawled docs |
-        | `get_page` | Retrieve all chunks for a specific page URL |
-        | `add_page` | Fetch, chunk, embed, and add a new page to the collection |
-        | `create_crawl` | Start a new collection for a different URL; returns new `mcp_endpoint` + `mcp_api_key` |
-        | `list_crawls` | List all indexed collections for this account |
-        | `get_status` | Poll status of any crawl — use after `create_crawl` returns `queued` |
+        | `list_crawls` | List all indexed collections for your account; call at session start |
+        | `create_crawl` | Start a new crawl for a URL; returns `crawl_id` and `mcp_endpoint` |
+        | `get_status` | Poll crawl status; use after `create_crawl` returns `queued` |
 
-        **MCP protocol methods also supported:** `initialize`, `notifications/initialized`, `tools/list`
+        **MCP protocol methods:** `initialize`, `notifications/initialized`, `tools/list`
+
+        Register this endpoint once as a persistent MCP server. Use it to discover existing
+        collections and start new crawls — then register the per-collection endpoint for search.
+      operationId: mcpHandleAccount
+      security:
+        - PlatformKeyBearer: []
+        - PlatformKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RPCRequest"
+            examples:
+              list_crawls:
+                summary: List all indexed collections
+                value:
+                  jsonrpc: "2.0"
+                  id: 1
+                  method: tools/call
+                  params:
+                    name: list_crawls
+                    arguments: {}
+              create_crawl:
+                summary: Start a new crawl
+                value:
+                  jsonrpc: "2.0"
+                  id: 2
+                  method: tools/call
+                  params:
+                    name: create_crawl
+                    arguments:
+                      url: "https://docs.pydantic.dev/latest/"
+              get_status:
+                summary: Poll crawl status
+                value:
+                  jsonrpc: "2.0"
+                  id: 3
+                  method: tools/call
+                  params:
+                    name: get_status
+                    arguments:
+                      crawl_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+      responses:
+        "200":
+          description: JSON-RPC response (errors are in the response body, not HTTP status)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RPCResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/mcp/{crawl_id}:
+    post:
+      tags: [mcp]
+      summary: Collection-level MCP endpoint
+      description: |
+        JSON-RPC 2.0 endpoint scoped to a specific documentation collection.
+        Authenticate with your **platform API key** — the same key used for REST calls.
+
+        Ownership is verified: the platform key must belong to the user who created this crawl.
+
+        **Available tools:**
+        | Tool | Description |
+        |------|-------------|
+        | `search_docs` | Hybrid semantic search (MiniLM dense + BM25 sparse, fused with RRF) |
+        | `get_page` | Retrieve all indexed chunks for a specific page URL |
+        | `add_page` | Fetch, chunk, embed, and add a missing page to this collection |
+
+        **MCP protocol methods:** `initialize`, `notifications/initialized`, `tools/list`
+
+        **Legacy direct methods** (curl-friendly): `search_docs`, `get_page`, `add_page` —
+        call the method name directly without the `tools/call` wrapper.
       operationId: mcpHandle
       security:
-        - MCPKeyBearer: []
-        - MCPKeyHeader: []
+        - PlatformKeyBearer: []
+        - PlatformKeyHeader: []
       parameters:
         - name: crawl_id
           in: path
@@ -220,40 +464,11 @@ paths:
                     arguments:
                       query: "how to define validators"
                       top_k: 5
-              tools_call_list_crawls:
-                summary: MCP tools/call — list_crawls
-                value:
-                  jsonrpc: "2.0"
-                  id: 2
-                  method: tools/call
-                  params:
-                    name: list_crawls
-                    arguments: {}
-              tools_call_get_status:
-                summary: MCP tools/call — get_status
-                value:
-                  jsonrpc: "2.0"
-                  id: 3
-                  method: tools/call
-                  params:
-                    name: get_status
-                    arguments:
-                      crawl_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-              tools_call_create_crawl:
-                summary: MCP tools/call — create_crawl
-                value:
-                  jsonrpc: "2.0"
-                  id: 4
-                  method: tools/call
-                  params:
-                    name: create_crawl
-                    arguments:
-                      url: "https://docs.pydantic.dev/latest/"
               tools_call_get_page:
                 summary: MCP tools/call — get_page
                 value:
                   jsonrpc: "2.0"
-                  id: 5
+                  id: 2
                   method: tools/call
                   params:
                     name: get_page
@@ -263,14 +478,14 @@ paths:
                 summary: MCP tools/call — add_page
                 value:
                   jsonrpc: "2.0"
-                  id: 6
+                  id: 3
                   method: tools/call
                   params:
                     name: add_page
                     arguments:
                       url: "https://docs.pydantic.dev/latest/concepts/types/"
               legacy_search:
-                summary: Legacy direct — search_docs
+                summary: Legacy direct — search_docs (curl-friendly)
                 value:
                   jsonrpc: "2.0"
                   id: 1
@@ -286,17 +501,17 @@ paths:
               schema:
                 $ref: "#/components/schemas/RPCResponse"
               examples:
-                tools_call_result:
-                  summary: tools/call result envelope
+                search_result:
+                  summary: search_docs result
                   value:
                     jsonrpc: "2.0"
                     id: 1
                     result:
                       content:
                         - type: text
-                          text: "[{\"text\":\"Validators are...\",\"page_url\":\"https://...\",\"score\":0.91}]"
+                          text: "[{\"text\":\"Validators are...\",\"page_url\":\"https://...\",\"heading_path\":\"Validators > Field validators\",\"score\":0.91}]"
                 method_not_found:
-                  summary: Method not found error
+                  summary: Tool not found
                   value:
                     jsonrpc: "2.0"
                     id: 1
@@ -314,20 +529,15 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
-      description: Platform API key from POST /v1/register
+      description: |
+        Platform API key obtained from the dashboard (GitHub login) or `POST /v1/register`.
+        Used for all REST endpoints and all MCP endpoints.
     PlatformKeyBearer:
       type: http
       scheme: bearer
-      description: Platform API key as Bearer token
-    MCPKeyBearer:
-      type: http
-      scheme: bearer
-      description: MCP API key from POST /v1/crawl
-    MCPKeyHeader:
-      type: apiKey
-      in: header
-      name: X-API-Key
-      description: MCP API key from POST /v1/crawl
+      description: |
+        Platform API key as a Bearer token.
+        Used for all REST endpoints and all MCP endpoints.
 
   schemas:
     RegisterResponse:
@@ -341,8 +551,50 @@ components:
           description: Platform API key — shown once, save immediately
           example: a3f1c2d4e5b6...
 
+    GitHubLoginRequest:
+      type: object
+      required: [github_token]
+      properties:
+        github_token:
+          type: string
+          description: GitHub OAuth access token obtained from Better Auth after the GitHub login flow
+          example: gho_16C7e42F292c6912E7710c838347Ae178B4a
+
+    GitHubLoginResponse:
+      type: object
+      description: |
+        One of two shapes is returned:
+        - First login: `{ api_key, email }` — key shown once, save it
+        - Returning user: `{ has_key: true, email }` — key already stored, not returned again
+      properties:
+        api_key:
+          type: string
+          description: New platform API key (only present on first login)
+          example: a3f1c2d4e5b6...
+        has_key:
+          type: boolean
+          description: True when the user already has a stored key (api_key is omitted)
+          example: true
+        email:
+          type: string
+          example: you@example.com
+
+    RotateKeyResponse:
+      type: object
+      properties:
+        api_key:
+          type: string
+          description: New platform API key — old key is immediately invalidated
+          example: d7f2a1b3c8e9...
+        email:
+          type: string
+          example: you@example.com
+
     CrawlResponse:
       type: object
+      description: |
+        Returned by `POST /v1/crawl`. On cache hit (`status: ready`), includes `claude_md`.
+        The `mcp_endpoint` is authenticated with the same platform API key used for REST calls.
       properties:
         crawl_id:
           type: string
@@ -350,24 +602,14 @@ components:
         mcp_endpoint:
           type: string
           format: uri
-          example: http://localhost:8080/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
-        mcp_api_key:
-          type: string
-          description: MCP API key — shown once, save immediately
-          example: b7e2f1a3c4d5...
+          example: https://mcp-me-production.up.railway.app/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
         status:
           $ref: "#/components/schemas/CrawlStatusEnum"
         claude_md:
           type: string
           description: |
-            Ready-to-paste CLAUDE.md snippet. Only present when `status == "ready"` and page_count > 0.
-            Contains endpoint, key, source URL, page/chunk counts, and the rule for the agent to call search_docs first.
-          example: |
-            ## DocsMCP — docs.pydantic.dev
-            Endpoint: http://localhost:8080/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
-            Key: b7e2f1a3c4d5...
-            Source: https://docs.pydantic.dev/latest/ (142 pages · 1847 chunks · 2026-06-22)
-            Rule: Always call search_docs before answering questions about this library. Use list_crawls to see all indexed collections.
+            Ready-to-paste CLAUDE.md snippet. Only present when `status == "ready"` and `page_count > 0`.
+          example: "## mcp-me -- docs.astro.build\nEndpoint: https://...\n..."
 
     CrawlStatusResponse:
       type: object
@@ -379,14 +621,65 @@ components:
           $ref: "#/components/schemas/CrawlStatusEnum"
         page_count:
           type: integer
-          example: 142
+          example: 312
         chunk_count:
           type: integer
-          example: 1847
+          example: 2840
         mcp_endpoint:
           type: string
           format: uri
-          example: http://localhost:8080/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
+          example: https://mcp-me-production.up.railway.app/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
+
+    CrawlPagesResponse:
+      type: object
+      properties:
+        crawl_id:
+          type: string
+          format: uuid
+        count:
+          type: integer
+          description: Total number of indexed pages
+          example: 312
+        pages:
+          type: array
+          items:
+            $ref: "#/components/schemas/CrawlPage"
+
+    CrawlPage:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          example: https://docs.astro.build/en/guides/middleware/
+        title:
+          type: string
+          example: Middleware
+        chunk_count:
+          type: integer
+          example: 8
+        crawled_at:
+          type: string
+          format: date-time
+          example: "2026-06-25T10:30:00Z"
+
+    PaginatedCrawlsResponse:
+      type: object
+      properties:
+        crawls:
+          type: array
+          items:
+            $ref: "#/components/schemas/CrawlListEntry"
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 10
+        has_more:
+          type: boolean
+          description: True when there are additional pages beyond this one
+          example: false
 
     CrawlListEntry:
       type: object
@@ -409,11 +702,11 @@ components:
         crawled_at:
           type: string
           format: date
-          example: "2026-06-22"
+          example: "2026-06-25"
         mcp_endpoint:
           type: string
           format: uri
-          example: http://localhost:8080/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
+          example: https://mcp-me-production.up.railway.app/v1/mcp/3fa85f64-5717-4562-b3fc-2c963f66afa6
 
     CrawlStatusEnum:
       type: string
@@ -434,6 +727,10 @@ components:
           example: 1
         method:
           type: string
+          description: |
+            MCP protocol methods: `initialize`, `notifications/initialized`, `tools/list`, `tools/call`
+
+            Legacy direct methods (collection endpoint only): `search_docs`, `get_page`, `add_page`
           enum:
             - tools/call
             - tools/list
@@ -442,93 +739,8 @@ components:
             - search_docs
             - get_page
             - add_page
-            - create_crawl
-            - list_crawls
-            - get_status
         params:
-          description: Shape depends on method — see examples above
-
-    SearchDocsParams:
-      type: object
-      required: [query]
-      properties:
-        query:
-          type: string
-          example: how to define validators
-        top_k:
-          type: integer
-          default: 5
-          example: 5
-
-    GetPageParams:
-      type: object
-      required: [url]
-      properties:
-        url:
-          type: string
-          format: uri
-          example: https://docs.pydantic.dev/latest/concepts/validators/
-
-    AddPageParams:
-      type: object
-      required: [url]
-      properties:
-        url:
-          type: string
-          format: uri
-          example: https://docs.pydantic.dev/latest/concepts/types/
-
-    CreateCrawlParams:
-      type: object
-      required: [url]
-      properties:
-        url:
-          type: string
-          format: uri
-          description: Root URL of the documentation to crawl
-          example: https://docs.pydantic.dev/latest/
-
-    GetStatusParams:
-      type: object
-      properties:
-        crawl_id:
-          type: string
-          format: uuid
-          description: Crawl ID to check. Omit to check the current session's crawl.
-          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
-
-    CreateCrawlResult:
-      type: object
-      properties:
-        crawl_id:
-          type: string
-          format: uuid
-        mcp_endpoint:
-          type: string
-          format: uri
-        mcp_api_key:
-          type: string
-          description: New MCP API key — shown once, save it
-        status:
-          $ref: "#/components/schemas/CrawlStatusEnum"
-
-    SearchResult:
-      type: object
-      properties:
-        text:
-          type: string
-        page_url:
-          type: string
-          format: uri
-        page_title:
-          type: string
-        heading_path:
-          type: string
-          example: "Validators > Field validators"
-        score:
-          type: number
-          format: float
-          example: 0.91
+          description: Shape depends on method and tool name — see examples above
 
     RPCResponse:
       type: object
@@ -543,10 +755,30 @@ components:
         result:
           description: |
             Present on success. Shape depends on method:
-            - `tools/call`: `{content:[{type:"text",text:"<json-encoded result>"}]}`
+            - `tools/call`: `{ content: [{ type: "text", text: "<json-encoded result>" }] }`
             - Legacy direct methods: raw result object or array
         error:
           $ref: "#/components/schemas/RPCError"
+
+    SearchResult:
+      type: object
+      description: One chunk returned by search_docs (encoded as JSON string inside the tools/call text envelope)
+      properties:
+        text:
+          type: string
+          description: The chunk text
+        page_url:
+          type: string
+          format: uri
+        page_title:
+          type: string
+        heading_path:
+          type: string
+          example: "Validators > Field validators"
+        score:
+          type: number
+          format: float
+          example: 0.91
 
     RPCError:
       type: object
@@ -572,15 +804,15 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
           example:
-            error: "Key: 'email' Error:Field validation for 'email' failed on the 'required' tag"
+            error: "url is required"
     Unauthorized:
-      description: Missing or invalid API key
+      description: Missing or invalid platform API key
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
           example:
-            error: "unauthorized"
+            error: "invalid api key"
     NotFound:
       description: Resource not found
       content:
