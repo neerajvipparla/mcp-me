@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
+import Image from "next/image"
 import Link from "next/link"
 
 /* ── Pipeline stage types ── */
@@ -45,7 +46,10 @@ function Nav() {
       }`}
     >
       <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
-        <span className="font-serif italic text-xl text-tx">mcp-me</span>
+        <div className="flex items-center gap-2.5">
+          <Image src="/mcpme-logo.png" alt="mcp-me" width={30} height={30} className="rounded-md" />
+          <span className="font-serif italic text-xl text-tx">mcp-me</span>
+        </div>
         <div className="flex items-center gap-6">
           <a href="#how" className="text-sm text-tx-muted hover:text-tx transition-colors">
             How it works
@@ -446,7 +450,10 @@ function Footer() {
   return (
     <footer className="border-t border-border py-8 px-6">
       <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-        <span className="font-serif italic text-lg text-tx-muted">mcp-me</span>
+        <div className="flex items-center gap-2">
+          <Image src="/mcpme-logo.png" alt="mcp-me" width={24} height={24} className="rounded-md opacity-70" />
+          <span className="font-serif italic text-lg text-tx-muted">mcp-me</span>
+        </div>
         <div className="flex items-center gap-6 text-xs text-tx-muted">
           <a href="https://mcp-me-production.up.railway.app/health" target="_blank" rel="noreferrer" className="hover:text-tx transition-colors">
             API status

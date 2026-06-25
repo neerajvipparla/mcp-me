@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState, useCallback, useRef } from "react"
+import Image from "next/image"
 import { authClient } from "@/lib/auth-client"
 import { useRouter } from "next/navigation"
 
@@ -259,7 +260,10 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-bg">
       {/* Nav */}
       <nav className="border-b border-border px-6 h-16 flex items-center justify-between">
-        <span className="font-serif italic text-xl text-tx">mcp-me</span>
+        <div className="flex items-center gap-2.5">
+          <Image src="/mcpme-logo.png" alt="mcp-me" width={30} height={30} className="rounded-md" />
+          <span className="font-serif italic text-xl text-tx">mcp-me</span>
+        </div>
         <div className="flex items-center gap-4">
           <span className="text-sm text-tx-muted">{session.user.email}</span>
           <button
