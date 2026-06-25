@@ -59,6 +59,13 @@ type UserCrawlRecord struct {
 	MCPAPIKeyHash string
 }
 
+type CrawlPage struct {
+	URL        string
+	Title      string
+	ChunkCount int
+	CrawledAt  time.Time
+}
+
 type PostgresStore struct {
 	pool *pgxpool.Pool
 }
@@ -202,6 +209,27 @@ func (s *PostgresStore) CreateCrawlPage(ctx context.Context, crawlID, url, title
 		crawlID, url, title, chunkCount,
 	)
 	return err
+}
+
+func (s *PostgresStore) GetCrawlPages(ctx context.Context, crawlID string) ([]*CrawlPage, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT url, title, chunk_count, crawled_at FROM crawl_pages
+		 WHERE crawl_id = $1 ORDER BY crawled_at ASC`,
+		crawlID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*CrawlPage
+	for rows.Next() {
+		var pg CrawlPage
+		if err := rows.Scan(&pg.URL, &pg.Title, &pg.ChunkCount, &pg.CrawledAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &pg)
+	}
+	return out, rows.Err()
 }
 
 // FindCrawlByPageURL returns the most recent ready crawl that already scraped url.

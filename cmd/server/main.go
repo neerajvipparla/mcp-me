@@ -173,6 +173,7 @@ func main() {
 		crawlHandler := api.NewCrawlHandler(pg, vs, queue, cfg.Server.ResolvedHost())
 		authed.POST("/crawl", crawlHandler.PostCrawl)
 		authed.GET("/crawl/:id", crawlHandler.GetStatus)
+		authed.GET("/crawl/:id/pages", crawlHandler.GetPages)
 		authed.GET("/crawls", crawlHandler.ListCrawls)
 
 		// MCP endpoints — auth via platform API key (SHA-256)

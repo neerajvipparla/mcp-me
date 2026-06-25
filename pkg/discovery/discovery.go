@@ -1,7 +1,8 @@
 // MODULE: pkg/discovery/discovery.go
-// PURPOSE: Owns URL discovery for a documentation site. Tries sitemap.xml first
-//          (fast, exhaustive); falls back to BFS link extraction when no sitemap
-//          exists. Returns a deduplicated, filtered URL list capped at maxPages.
+// PURPOSE: Owns URL discovery for a documentation site.
+//          Strategy order: llms.txt → sitemap.xml (+ robots.txt Sitemap: headers) → BFS.
+//          Falls through to the next strategy when the current one yields 0 filtered URLs.
+//          Returns a deduplicated, filtered URL list capped at maxPages.
 //
 // CORE DATA STRUCTURES:
 //   - Discoverer: holds Filter + maxPages + optional Handler chain + http.Client.
@@ -40,7 +41,7 @@ import (
 )
 
 // Discoverer finds all crawlable URLs for a documentation site.
-// It tries sitemap.xml first; falls back to BFS link extraction.
+// Strategy order: llms.txt → sitemap (+ robots.txt) → BFS → Firecrawl (pipeline fallback).
 type Discoverer struct {
 	maxPages int
 	filter   *Filter
@@ -84,13 +85,43 @@ func NewDiscoverer(rootURL string, opts ...Option) (*Discoverer, error) {
 }
 
 // Discover returns all crawlable URLs rooted at rootURL.
-// Tries sitemap.xml first; uses BFS link extraction as fallback.
+// Strategy order: llms.txt → sitemap.xml (+ robots.txt Sitemap: headers) → BFS.
+// Falls through to the next strategy whenever the current one returns 0 filtered URLs.
 func (d *Discoverer) Discover(ctx context.Context, rootURL string) ([]string, error) {
 	tracer := d.logger.Tracer("discovery")
 	ctx, span := tracer.Start(ctx, "discovery")
 	defer span.End()
 	span.SetAttributes(attribute.String("root_url", rootURL))
 
+	// 1. llms.txt — explicit AI-oriented URL list published by the site owner.
+	//    Checked first because it's the most accurate and intentional index.
+	_, llmsSpan := tracer.Start(ctx, "discovery.llmstxt")
+	llmsURLs, _ := FetchLLMSTxt(ctx, rootURL)
+	if len(llmsURLs) > 0 {
+		filtered := d.applyFilter(llmsURLs)
+		llmsSpan.SetAttributes(attribute.Int("urls_found", len(filtered)))
+		llmsSpan.End()
+		if len(filtered) > 0 {
+			span.SetAttributes(attribute.String("strategy", "llms.txt"))
+			d.logger.Info(ctx, "llms.txt used",
+				ion.String("file", "discovery.go"),
+				ion.String("func", "Discover"),
+				ion.String("url", rootURL),
+				ion.String("url_count", fmt.Sprintf("%d", len(filtered))),
+			)
+			return filtered, nil
+		}
+		d.logger.Info(ctx, "llms.txt found but all urls filtered: trying sitemap",
+			ion.String("file", "discovery.go"),
+			ion.String("func", "Discover"),
+			ion.String("url", rootURL),
+			ion.String("llms_count", fmt.Sprintf("%d", len(llmsURLs))),
+		)
+	}
+	llmsSpan.SetAttributes(attribute.Int("urls_found", 0))
+	llmsSpan.End()
+
+	// 2. Sitemap — checks path-based candidates (narrowest first) then robots.txt.
 	sitemapCtx, sitemapSpan := tracer.Start(ctx, "discovery.sitemap")
 	urls, err := FetchSitemap(sitemapCtx, rootURL)
 	if err != nil {
@@ -128,8 +159,9 @@ func (d *Discoverer) Discover(ctx context.Context, rootURL string) ([]string, er
 	sitemapSpan.SetAttributes(attribute.Int("urls_found", 0))
 	sitemapSpan.End()
 
+	// 3. BFS — follows links from the root page.
 	span.SetAttributes(attribute.String("strategy", "bfs"))
-	d.logger.Info(ctx, "no sitemap: falling back to bfs",
+	d.logger.Info(ctx, "no sitemap or llms.txt: falling back to bfs",
 		ion.String("file", "discovery.go"),
 		ion.String("func", "Discover"),
 		ion.String("url", rootURL),
