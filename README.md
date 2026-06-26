@@ -158,22 +158,6 @@ X-API-Key: <platform_api_key>
 Authorization: Bearer <platform_api_key>
 ```
 
-### Register (programmatic / CLI use)
-
-If you're not using the web dashboard, you can register directly:
-
-```bash
-curl -X POST https://mcp-me-production.up.railway.app/v1/register \
-  -H "Content-Type: application/json" \
-  -d '{"email": "you@example.com"}'
-```
-
-```json
-{ "api_key": "a3f9...", "email": "you@example.com" }
-```
-
-The `api_key` is shown once. Save it — it cannot be recovered.
-
 ### Submit a crawl
 
 ```bash

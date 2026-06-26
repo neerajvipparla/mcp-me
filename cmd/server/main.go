@@ -162,7 +162,6 @@ func main() {
 	v1 := r.Group("/v1")
 	{
 		// Public — no platform key required
-		v1.POST("/register", api.NewRegisterHandler(pg).Register)
 		ghAuth := api.NewGitHubAuthHandler(pg)
 		v1.POST("/auth/github", ghAuth.GitHubLogin)
 		v1.POST("/auth/github/rotate", ghAuth.RotateKey)

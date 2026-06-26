@@ -5,7 +5,7 @@
 //          so callers are not forced to depend on methods they never call.
 //
 // CONSUMER MAP:
-//   UserDB   → PlatformKeyAuth middleware, RegisterHandler
+//   UserDB   → PlatformKeyAuth middleware, GitHubAuthHandler
 //   CrawlDB  → CrawlHandler, PipelineHandler (worker), MCP Server/Tools
 //   DB       → cmd/server/main.go wiring only
 //
@@ -22,7 +22,6 @@ import (
 // UserDB is the minimum interface for user management.
 // Satisfy this to plug in any auth-compatible store.
 type UserDB interface {
-	CreateUser(ctx context.Context, r *UserRecord) error
 	// FindUserByKeyHash looks up by SHA-256 hex of the platform API key.
 	// Returns "", nil when not found.
 	FindUserByKeyHash(ctx context.Context, keyHash string) (string, error)

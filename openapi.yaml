@@ -13,9 +13,8 @@ info:
     Authorization: Bearer <platform_api_key>
     ```
 
-    The platform API key is obtained by:
-    - Signing in with GitHub via the dashboard (key shown once on first login)
-    - Or via `POST /v1/register` for programmatic/CLI use
+    The platform API key is obtained by signing in with GitHub via the dashboard —
+    the key is shown once on first login. Use `POST /v1/auth/github/rotate` to get a new one.
 
     The same platform API key authenticates both REST endpoints and MCP endpoints.
   version: 2.0.0
@@ -28,7 +27,7 @@ servers:
 
 tags:
   - name: auth
-    description: User registration and GitHub OAuth key exchange
+    description: GitHub OAuth key exchange and key rotation
   - name: crawl
     description: Crawl job submission, status, and page listing
   - name: mcp
@@ -50,50 +49,6 @@ paths:
                   ok:
                     type: boolean
                     example: true
-
-  /v1/register:
-    post:
-      tags: [auth]
-      summary: Register with email (programmatic / CLI)
-      description: |
-        Creates a user account and returns a platform API key.
-        Use this for programmatic or CLI access when you're not using the web dashboard.
-
-        For the standard web flow, sign in with GitHub — the dashboard handles key delivery automatically.
-
-        The `api_key` is shown **once** and cannot be recovered. Save it immediately.
-      operationId: register
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [email]
-              properties:
-                email:
-                  type: string
-                  format: email
-                  example: you@example.com
-      responses:
-        "200":
-          description: User created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RegisterResponse"
-        "409":
-          description: Email already registered
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-              example:
-                error: "email already registered"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "500":
-          $ref: "#/components/responses/InternalError"
 
   /v1/auth/github:
     post:
@@ -530,7 +485,7 @@ components:
       in: header
       name: X-API-Key
       description: |
-        Platform API key obtained from the dashboard (GitHub login) or `POST /v1/register`.
+        Platform API key obtained from the dashboard after GitHub login.
         Used for all REST endpoints and all MCP endpoints.
     PlatformKeyBearer:
       type: http
@@ -540,17 +495,6 @@ components:
         Used for all REST endpoints and all MCP endpoints.
 
   schemas:
-    RegisterResponse:
-      type: object
-      properties:
-        email:
-          type: string
-          example: you@example.com
-        api_key:
-          type: string
-          description: Platform API key — shown once, save immediately
-          example: a3f1c2d4e5b6...
-
     GitHubLoginRequest:
       type: object
       required: [github_token]

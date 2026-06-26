@@ -78,15 +78,6 @@ func NewPostgresStore(ctx context.Context, dsn string) (DB, error) {
 	return &PostgresStore{pool: pool}, nil
 }
 
-func (s *PostgresStore) CreateUser(ctx context.Context, r *UserRecord) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO users (id, email, platform_api_key_hash, created_at)
-		 VALUES ($1, $2, $3, now())`,
-		r.ID, r.Email, r.PlatformAPIKeyHash,
-	)
-	return err
-}
-
 // UpsertUserByEmail inserts a new user with the given key hash.
 // If the email already exists AND already has a key hash, it does NOT overwrite it
 // and returns hasKey=true. If the user exists but has no key hash, it sets the hash.
