@@ -120,6 +120,9 @@ func Setup(logDir string, logFileName string) (*ion.Ion, []ion.Warning, error) {
 				AutoSchema:    true,
 				FlushInterval: 1 * time.Second,
 			}
+			// Tracing uses the same ClickHouse sink. Enable it alongside logging
+			// so Tracer() calls don't log a spurious error about tracing being disabled.
+			cfg.Tracing.Enabled = true
 		}
 
 		globalLogger, globalWarnings, globalInitErr = ion.New(cfg)
