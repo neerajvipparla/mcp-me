@@ -126,7 +126,7 @@ func (s *Server) HandleAccount(c *gin.Context) {
 		case "create_crawl":
 			var p2 struct{ URL string `json:"url"` }
 			json.Unmarshal(p.Arguments, &p2)
-			res, err := s.tools.CreateCrawl(ctx, "", p2.URL)
+			res, err := s.tools.CreateCrawl(ctx, userID, p2.URL)
 			if err != nil {
 				rpcErr = &rpcError{Code: -32000, Message: err.Error()}
 			} else {
@@ -380,7 +380,7 @@ func (s *Server) callTool(ctx context.Context, crawlID, userID, name string, arg
 			URL string `json:"url"`
 		}
 		json.Unmarshal(args, &p)
-		res, err := s.tools.CreateCrawl(ctx, crawlID, p.URL)
+		res, err := s.tools.CreateCrawl(ctx, userID, p.URL)
 		if err != nil {
 			return nil, &rpcError{Code: -32000, Message: err.Error()}
 		}

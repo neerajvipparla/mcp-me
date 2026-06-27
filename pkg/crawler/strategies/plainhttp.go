@@ -78,6 +78,18 @@ func (h *PlainHTTPHandler) Handle(ctx context.Context, url string) (*types.Fetch
 
 	if resp.StatusCode != http.StatusOK {
 		span.SetAttributes(attribute.Int("status_code", resp.StatusCode))
+		// 4xx/5xx are server-side rejections — chromedp cannot bypass them.
+		// Returning an error here skips the chromedp fallback, which would
+		// otherwise wait its full 20s timeout for every blocked URL.
+		if resp.StatusCode >= 400 {
+			crawlerLogger.Warn(ctx, "plainhttp: server rejected request",
+				ion.String("file", "plainhttp.go"),
+				ion.String("func", "Handle"),
+				ion.String("url", url),
+				ion.String("status_code", fmt.Sprintf("%d", resp.StatusCode)),
+			)
+			return nil, fmt.Errorf("http %d", resp.StatusCode)
+		}
 		crawlerLogger.Warn(ctx, "plainhttp: non-200 response: falling back",
 			ion.String("file", "plainhttp.go"),
 			ion.String("func", "Handle"),

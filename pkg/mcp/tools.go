@@ -70,13 +70,13 @@ func NewTools(vs store.Store, db store.CrawlDB, chain crawlertypes.Handler, queu
 // Checks cache first — if URL was already crawled, returns existing collection instantly.
 // Otherwise enqueues a full crawl job and returns status "queued".
 // The returned mcp_api_key is shown once — agent must store it to access the new collection.
-func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string) (*CreateCrawlResult, error) {
+func (t *Tools) CreateCrawl(ctx context.Context, userID, rootURL string) (*CreateCrawlResult, error) {
 	tracer := t.logger.Tracer("mcp")
 	ctx, span := tracer.Start(ctx, "mcp.create_crawl")
 	defer span.End()
 	span.SetAttributes(
 		attribute.String("url", rootURL),
-		attribute.String("current_crawl_id", currentCrawlID),
+		attribute.String("user_id", userID),
 	)
 
 	embedderID := t.vs.EmbedderID()
@@ -95,7 +95,7 @@ func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string)
 			ion.String("url", rootURL),
 			ion.String("crawl_id", existing.ID),
 		)
-		return t.issueKey(ctx, currentCrawlID, existing.ID, rootURL, "ready")
+		return t.issueKey(ctx, userID, existing.ID, rootURL, "ready")
 	}
 
 	// Cache hit 2: URL already scraped as a sub-page of another crawl.
@@ -111,7 +111,7 @@ func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string)
 			ion.String("url", rootURL),
 			ion.String("crawl_id", byPage.ID),
 		)
-		return t.issueKey(ctx, currentCrawlID, byPage.ID, rootURL, "ready")
+		return t.issueKey(ctx, userID, byPage.ID, rootURL, "ready")
 	}
 
 	crawlID := uuid.NewString()
@@ -173,18 +173,16 @@ func (t *Tools) CreateCrawl(ctx context.Context, currentCrawlID, rootURL string)
 		ion.String("url", rootURL),
 	)
 
-	return t.issueKey(ctx, currentCrawlID, crawlID, rootURL, "queued")
+	return t.issueKey(ctx, userID, crawlID, rootURL, "queued")
 }
 
-// issueKey creates a user_crawls row for the new crawl, reusing the user from
-// the current session's crawl_id. Returns the new mcp_endpoint + plaintext key.
-func (t *Tools) issueKey(ctx context.Context, currentCrawlID, newCrawlID, rootURL, status string) (*CreateCrawlResult, error) {
-	uc, err := t.db.GetUserCrawlByCrawlID(ctx, currentCrawlID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve user: %w", err)
-	}
-	if uc == nil {
-		return nil, fmt.Errorf("user crawl not found for crawl_id: %s", currentCrawlID)
+// issueKey creates a user_crawls row linking newCrawlID to userID, and returns
+// the new mcp_endpoint + plaintext key. userID is resolved once during MCP auth
+// (both endpoints already have it) and threaded in — never re-derived from a
+// crawl_id, which the account endpoint does not have.
+func (t *Tools) issueKey(ctx context.Context, userID, newCrawlID, rootURL, status string) (*CreateCrawlResult, error) {
+	if userID == "" {
+		return nil, fmt.Errorf("issue key: empty user id")
 	}
 
 	raw := make([]byte, 32)
@@ -198,7 +196,7 @@ func (t *Tools) issueKey(ctx context.Context, currentCrawlID, newCrawlID, rootUR
 
 	if err := t.db.CreateUserCrawl(ctx, &store.UserCrawlRecord{
 		ID:            uuid.NewString(),
-		UserID:        uc.UserID,
+		UserID:        userID,
 		CrawlID:       newCrawlID,
 		MCPAPIKeyHash: string(keyHash),
 	}); err != nil {

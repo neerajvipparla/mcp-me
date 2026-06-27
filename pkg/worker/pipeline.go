@@ -102,6 +102,21 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		ion.String("crawl_id", p.CrawlID),
 	)
 
+	// Pre-flight: probe root URL before spending time on discovery.
+	// A 403/429/451 means the site is actively blocking — no strategy will help.
+	// Return SkipRetry so Asynq doesn't waste 3 retries on a permanently blocked site.
+	if blocked, status := probeBlocked(p.URL); blocked {
+		_ = h.db.UpdateCrawlStatus(ctx, p.CrawlID, "failed")
+		h.logger.Warn(ctx, "pre-flight: site is blocking crawlers",
+			ion.String("file", "pipeline.go"),
+			ion.String("func", "ProcessTask"),
+			ion.String("crawl_id", p.CrawlID),
+			ion.String("url", p.URL),
+			ion.String("status_code", fmt.Sprintf("%d", status)),
+		)
+		return fmt.Errorf("%w: root URL returned %d", asynq.SkipRetry, status)
+	}
+
 	d, err := discovery.NewDiscoverer(p.URL,
 		discovery.WithMaxPages(500),
 		discovery.WithHandler(h.chain),
@@ -292,6 +307,11 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 				ion.String("crawl_id", p.CrawlID),
 			)
 		}
+		// If we fetched a meaningful sample and every single one failed, the site is
+		// blocking us — retrying won't help. Use SkipRetry to avoid 3 Asynq retries.
+		if len(results) >= 5 && skipped == len(results) {
+			return fmt.Errorf("%w: all %d fetched pages failed for %s", asynq.SkipRetry, len(results), p.URL)
+		}
 		return fmt.Errorf("no pages indexed for %s (fetched %d, all failed)", p.URL, len(results))
 	}
 
@@ -347,6 +367,25 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, t *asynq.Task) error 
 		ion.String("chunks", fmt.Sprintf("%d", len(allTexts))),
 	)
 	return nil
+}
+
+// probeBlocked does a quick HEAD to the root URL to detect server-side blocks
+// before spending time on discovery and fetching.
+// Returns (true, statusCode) when the site is actively rejecting crawlers.
+func probeBlocked(rawURL string) (bool, int) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Head(rawURL)
+	if err != nil {
+		return false, 0 // network error — let discovery decide
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusForbidden,        // 403
+		http.StatusTooManyRequests,    // 429
+		http.StatusUnavailableForLegalReasons: // 451
+		return true, resp.StatusCode
+	}
+	return false, resp.StatusCode
 }
 
 func fetchLastModified(rawURL string) *time.Time {

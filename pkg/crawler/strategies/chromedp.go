@@ -50,7 +50,7 @@ func (h *ChromedpHandler) Handle(ctx context.Context, url string) (*types.FetchR
 	taskCtx, taskCancel := chromedp.NewContext(h.allocCtx)
 	defer taskCancel()
 
-	timeoutCtx, timeoutCancel := context.WithTimeout(taskCtx, 30*time.Second)
+	timeoutCtx, timeoutCancel := context.WithTimeout(taskCtx, 20*time.Second)
 	defer timeoutCancel()
 
 	var html string
